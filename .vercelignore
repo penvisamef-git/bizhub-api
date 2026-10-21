@@ -1,0 +1,3 @@
+# never upload these with the code
+.env.prod
+.env.*.local

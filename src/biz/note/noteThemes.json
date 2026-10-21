@@ -1,0 +1,254 @@
+{
+ "note": "Public page themes for Digital Note (note_theme, paid per theme key, forever per business). default = free. Shared by the web (bizhub/src/note) and the API (bizhub-api/src/biz/note).",
+ "free": [
+  "default"
+ ],
+ "themes": [
+  {
+   "key": "default",
+   "en": "Default",
+   "km": "លំនាំដើម",
+   "accent": "",
+   "tags": [
+    "free"
+   ]
+  },
+  {
+   "key": "paper",
+   "en": "Paper",
+   "km": "ក្រដាស",
+   "accent": "#2f6feb",
+   "tags": [
+    "light",
+    "classic"
+   ]
+  },
+  {
+   "key": "linen",
+   "en": "Linen",
+   "km": "ក្រណាត់ទេសឯក",
+   "accent": "#8a6a3b",
+   "tags": [
+    "light",
+    "calm"
+   ]
+  },
+  {
+   "key": "notebook",
+   "en": "Notebook",
+   "km": "សៀវភៅសរសេរ",
+   "accent": "#2563eb",
+   "tags": [
+    "light",
+    "school"
+   ]
+  },
+  {
+   "key": "chalk",
+   "en": "Chalkboard",
+   "km": "ក្ដារខៀន",
+   "accent": "#f2c94c",
+   "tags": [
+    "dark",
+    "school"
+   ]
+  },
+  {
+   "key": "midnight",
+   "en": "Midnight",
+   "km": "កណ្ដាលអធ្រាត្រ",
+   "accent": "#8b7cff",
+   "tags": [
+    "dark"
+   ]
+  },
+  {
+   "key": "ocean",
+   "en": "Ocean",
+   "km": "មហាសមុទ្រ",
+   "accent": "#0ea5e9",
+   "tags": [
+    "light",
+    "fresh"
+   ]
+  },
+  {
+   "key": "forest",
+   "en": "Forest",
+   "km": "ព្រៃឈើ",
+   "accent": "#2f855a",
+   "tags": [
+    "dark",
+    "nature"
+   ]
+  },
+  {
+   "key": "sunset",
+   "en": "Sunset",
+   "km": "ថ្ងៃលិច",
+   "accent": "#f97316",
+   "tags": [
+    "warm",
+    "bright"
+   ]
+  },
+  {
+   "key": "lotus",
+   "en": "Lotus",
+   "km": "ផ្កាឈូក",
+   "accent": "#db2777",
+   "tags": [
+    "light",
+    "cambodia"
+   ]
+  },
+  {
+   "key": "temple",
+   "en": "Angkor Stone",
+   "km": "ថ្មអង្គរ",
+   "accent": "#b7791f",
+   "tags": [
+    "warm",
+    "cambodia"
+   ]
+  },
+  {
+   "key": "mango",
+   "en": "Mango",
+   "km": "ស្វាយ",
+   "accent": "#f59e0b",
+   "tags": [
+    "bright",
+    "fresh"
+   ]
+  },
+  {
+   "key": "mint",
+   "en": "Mint",
+   "km": "ជីអង្កាម",
+   "accent": "#10b981",
+   "tags": [
+    "light",
+    "fresh"
+   ]
+  },
+  {
+   "key": "lavender",
+   "en": "Lavender",
+   "km": "ឡាវេនឌ័រ",
+   "accent": "#8b5cf6",
+   "tags": [
+    "light",
+    "calm"
+   ]
+  },
+  {
+   "key": "coffee",
+   "en": "Coffee",
+   "km": "កាហ្វេ",
+   "accent": "#a0522d",
+   "tags": [
+    "warm"
+   ]
+  },
+  {
+   "key": "newsprint",
+   "en": "Newsprint",
+   "km": "កាសែត",
+   "accent": "#111111",
+   "tags": [
+    "light",
+    "classic"
+   ]
+  },
+  {
+   "key": "blueprint",
+   "en": "Blueprint",
+   "km": "ប្លង់",
+   "accent": "#7dd3fc",
+   "tags": [
+    "dark",
+    "work"
+   ]
+  },
+  {
+   "key": "neon",
+   "en": "Neon",
+   "km": "នីអុង",
+   "accent": "#22d3ee",
+   "tags": [
+    "dark",
+    "bright"
+   ]
+  },
+  {
+   "key": "glass",
+   "en": "Glass",
+   "km": "កញ្ចក់",
+   "accent": "#6366f1",
+   "tags": [
+    "bright"
+   ]
+  },
+  {
+   "key": "kraft",
+   "en": "Kraft",
+   "km": "ក្រដាសកាតុង",
+   "accent": "#7c4a1e",
+   "tags": [
+    "warm"
+   ]
+  },
+  {
+   "key": "sakura",
+   "en": "Sakura",
+   "km": "សាគូរ៉ា",
+   "accent": "#e11d74",
+   "tags": [
+    "light",
+    "calm"
+   ]
+  },
+  {
+   "key": "corporate",
+   "en": "Corporate",
+   "km": "ក្រុមហ៊ុន",
+   "accent": "#1d4ed8",
+   "tags": [
+    "light",
+    "work"
+   ]
+  },
+  {
+   "key": "school",
+   "en": "School",
+   "km": "សាលារៀន",
+   "accent": "#16a34a",
+   "tags": [
+    "bright",
+    "school"
+   ]
+  },
+  {
+   "key": "wedding",
+   "en": "Wedding",
+   "km": "អាពាហ៍ពិពាហ៍",
+   "accent": "#b08d57",
+   "tags": [
+    "light",
+    "event"
+   ]
+  },
+  {
+   "key": "festival",
+   "en": "Festival",
+   "km": "ពិធីបុណ្យ",
+   "accent": "#e11d48",
+   "tags": [
+    "bright",
+    "event",
+    "cambodia"
+   ]
+  }
+ ]
+}

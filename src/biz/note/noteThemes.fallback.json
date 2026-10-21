@@ -1,0 +1,6 @@
+{ "note": "Fallback theme keys until bizhub/src/note/noteThemes.json is copied here as noteThemes.json.", "themes": [
+  { "key": "paper" }, { "key": "linen" }, { "key": "notebook" }, { "key": "chalk" }, { "key": "midnight" }, { "key": "ocean" },
+  { "key": "forest" }, { "key": "sunset" }, { "key": "lotus" }, { "key": "temple" }, { "key": "mango" }, { "key": "mint" },
+  { "key": "lavender" }, { "key": "coffee" }, { "key": "newsprint" }, { "key": "blueprint" }, { "key": "neon" }, { "key": "glass" },
+  { "key": "kraft" }, { "key": "sakura" }, { "key": "corporate" }, { "key": "school" }, { "key": "wedding" }, { "key": "festival" }
+] }

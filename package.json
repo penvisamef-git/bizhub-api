@@ -1,0 +1,39 @@
+{
+  "name": "bizhub_api",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon",
+    "seed": "node scripts/seed.js",
+    "reset-password": "node scripts/reset-password.js",
+    "migrate:business-types": "node scripts/migrate-business-types.js",
+    "migrate:restaurant-yearly": "node scripts/migrate-restaurant-yearly.js",
+    "telegram:webhook": "node scripts/telegram-webhook.js",
+    "migrate:phone-login": "node scripts/migrate-phone-login.js",
+    "dev:8888": "api_port=8888 nodemon",
+    "deploy:uat": "node scripts/deploy.js uat",
+    "deploy:prod": "node scripts/deploy.js prod",
+    "env:prod": "node scripts/deploy.js env-prod",
+    "seed:prod": "node scripts/with-env.js .env.prod node scripts/seed.js",
+    "setup:prod": "node scripts/deploy.js setup-prod"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cloudinary": "^2.11.0",
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.0",
+    "express": "^4.21.2",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^9.9.3",
+    "multer": "^2.0.2",
+    "qrcode": "^1.5.4",
+    "ua-parser-js": "^2.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}

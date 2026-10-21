@@ -1,0 +1,27 @@
+const API = process.argv[2];
+Object.assign(process.env, { NODE_ENV: "test", API_AUTH_KEY: "k", JWT_SECRET: "s" });
+const req = (p) => require(`${API}/${p}`);
+const { MongoMemoryServer } = require("mongodb-memory-server");
+const mongoose = req("node_modules/mongoose"), express = req("node_modules/express"), jwt = req("node_modules/jsonwebtoken");
+(async () => {
+  const mem = await MongoMemoryServer.create(); await mongoose.connect(mem.getUri());
+  const app = express(); app.use(express.json());
+  const { api_auth } = req("src/util/api_auth");
+  req("src/biz/business.route")({ app, jwt, api_auth, main_route: "v1", jwt_auth: (q, s, n) => n(), request_user: (q, s, n) => n() });
+  const srv = app.listen(0); const base = `http://127.0.0.1:${srv.address().port}`;
+  await req("src/v1/admin/auth/auth_api_key.model").create({ api_auth_key: "k" });
+  const Customer = req("src/user/customer.model"), Sess = req("src/user/customer_session.model"), Business = req("src/biz/business.model");
+  const c = await Customer.create({ name: "O", password: "x", status: true, deleted: false, email: "o@x.com", phone: "012345678" });
+  const tok = jwt.sign({ type: "customer", id: String(c._id) }, "s"); await Sess.create({ customer_id: c._id, access_token: tok, expires_at: new Date(Date.now() + 864e5) });
+  const other = await Customer.create({ name: "P", password: "x", status: true, deleted: false, email: "p@x.com", phone: "012345679" });
+  const [a, b, d] = [await Business.create({ owner_id: c._id, name: "A", category: "namecard" }), await Business.create({ owner_id: c._id, name: "B", category: "event" }), await Business.create({ owner_id: c._id, name: "C", category: "mart" })];
+  const theirs = await Business.create({ owner_id: other._id, name: "X", category: "mart" });
+  const H = { "x-api-key": "k", authorization: `Bearer ${tok}`, "Content-Type": "application/json" };
+  let r = await (await fetch(`${base}/api/user/businesses-order`, { method: "PUT", headers: H, body: JSON.stringify({ ids: [d._id, a._id, theirs._id] }) })).json();
+  console.log("order after:", r.data.map((x) => x.name).join(","), "(expect C,A,B)");
+  console.log("other owner untouched:", (await Business.findById(theirs._id).lean()).position === null);
+  await Business.create({ owner_id: c._id, name: "D", category: "event" });
+  r = await (await fetch(`${base}/api/user/businesses`, { headers: H })).json();
+  console.log("new one at the end:", r.data.map((x) => x.name).join(","), "(expect C,A,B,D)");
+  srv.close(); await mongoose.disconnect(); await mem.stop(); process.exit(0);
+})().catch((e) => { console.error("CRASH", e); process.exit(2); });
