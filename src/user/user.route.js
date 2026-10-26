@@ -24,6 +24,7 @@ const Homepage = require("../homepage/homepage.model");
 const { DEFAULT_HOMEPAGE } = require("../homepage/homepage.defaults");
 const { grantSignupBonus, getCustomerWallet } = require("../coin/coin.service");
 const { verifyFirebaseToken, normalizePhone } = require("../util/firebase_auth");
+const { cancelOnLogin } = require("./account_delete");
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_RE = /^\+?[0-9 ]{8,20}$/;
@@ -55,6 +56,7 @@ const MSG = {
   wrongOld: "ពាក្យសម្ងាត់ចាស់មិនត្រឹមត្រូវ!",
   passwordChanged: "ពាក្យសម្ងាត់ត្រូវបានផ្លាស់ប្តូរ!",
   saved: "បានរក្សាទុក!",
+  deletionCancelled: "សូមស្វាគមន៍ការត្រឡប់មកវិញ! ការលុបគណនីរបស់អ្នកត្រូវបានបោះបង់។",
 };
 
 const TOKEN_DAYS = 30;
@@ -74,6 +76,7 @@ function loginData(customer, wallet, token) {
     coin_balance: wallet ? wallet.balance : 0,
     created_date: customer.created_date,
     photo: customer.photo?.url || "",
+    delete_at: customer.delete_at || null, // "Delete my account" is pending until this date
     ...(token ? { access_token: token } : {}),
   };
 }
@@ -202,11 +205,13 @@ const route = (prop) => {
 
   async function logIn(customer, req, res) {
     if (!customer.status) return res.status(403).json({ success: false, message: MSG.suspended });
+    // logging in again cancels a pending "Delete my account"
+    const cancelled = await cancelOnLogin(customer);
     customer.last_login_date = new Date();
     await customer.save();
     const wallet = await getCustomerWallet(customer._id);
     const token = await startSession(customer, req);
-    res.json({ success: true, data: loginData(customer, wallet, token) });
+    res.json({ success: true, data: { ...loginData(customer, wallet, token), ...(cancelled ? { deletion_cancelled: true } : {}) }, ...(cancelled ? { deletion_cancelled: true, message: MSG.deletionCancelled } : {}) });
   }
 
   // ===================================== LOGIN =====================================
@@ -262,12 +267,13 @@ const route = (prop) => {
       if (!customer.status) return res.status(403).json({ success: false, message: MSG.suspended });
       customer.password = await bcrypt.hash(newPassword, 10);
       if (checked.email) customer.email_verified = true;
+      const cancelled = await cancelOnLogin(customer); // a new password = logged in again: cancels "Delete my account"
       customer.last_login_date = new Date();
       await customer.save();
       await CustomerSession.deleteMany({ customer_id: customer._id }); // every device logs in again
       const wallet = await getCustomerWallet(customer._id);
       const token = await startSession(customer, req);
-      res.json({ success: true, data: loginData(customer, wallet, token), message: MSG.passwordReset });
+      res.json({ success: true, data: { ...loginData(customer, wallet, token), ...(cancelled ? { deletion_cancelled: true } : {}) }, message: MSG.passwordReset, ...(cancelled ? { deletion_cancelled: true } : {}) });
     } catch (err) {
       res.status(500).json({ success: false, message: MSG.server });
     }

@@ -861,7 +861,15 @@ module.exports = (prop, kit) => {
       const note = await require("../note/note.telegram")
         .tick()
         .catch(() => ({}));
-      res.json({ success: true, checked: list.length, sent, attendance: att, guesthouse: gh, mart, ical, qr, debt, stamp, event, note });
+      // "Delete my account": erase the accounts whose 30 days have passed (a few per run)
+      const accounts = await require("../../user/account_delete")
+        .purgeDueAccounts()
+        .catch((err) => ({ error: err?.message || String(err) }));
+      // Google Play coin packs: refunds / chargebacks take the coins back (once)
+      const googlePlay = await require("../../coin/google.route")
+        .syncVoided()
+        .catch((err) => ({ error: err?.message || String(err) }));
+      res.json({ success: true, checked: list.length, sent, attendance: att, guesthouse: gh, mart, ical, qr, debt, stamp, event, note, accounts, googlePlay });
     } catch (err) {
       console.error("[daily-report]", err);
       res.status(500).json({ success: false });

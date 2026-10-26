@@ -9,7 +9,7 @@ const mongoose = require("mongoose");
 //   card_redeem   a customer uses a card: cards wallet → customer
 //   card_cancel   super admin deletes an unused card: cards wallet → treasury
 const TX_TYPES = ["generate", "transfer", "signup_bonus", "spend", "card_create", "card_redeem", "card_cancel"];
-const PAYMENT_METHODS = ["KHQR", "ABA", "ACLEDA", "Wing", "Bank", "Card", "Cash", "Other"];
+const PAYMENT_METHODS = ["KHQR", "ABA", "ACLEDA", "Wing", "Bank", "Card", "Cash", "Google Play", "App Store", "Other"]; // "Google Play" / "App Store" = an in-app coin pack (Android / iPhone)
 
 const coinTransactionSchema = new mongoose.Schema(
   {

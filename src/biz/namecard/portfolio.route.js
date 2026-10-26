@@ -9,11 +9,12 @@
 //   (buy / renew: POST /api/user/businesses/:id/licenses/portfolio)
 // Public:
 //   GET /api/public/portfolio/:slug            (only while the license is active)
+//   GET /api/public/portfolio/:slug/files/:fileId[?download=1]   → redirect to the file (PDFs via a signed link)
 const mongoose = require("mongoose");
 const Portfolio = require("./portfolio.model");
 const multer = require("multer");
 const { LISTS, TEXTS, SKILLS, THEMES, FREE_THEMES, PREMIUM_THEMES, FILES } = require("./portfolio.spec");
-const { uploadBuffer, deleteFile } = require("../../util/cloudinary");
+const { uploadBuffer, deleteFile, cloudinary } = require("../../util/cloudinary");
 const coin = require("../../coin/coin.service");
 const Namecard = require("./namecard.model");
 const Business = require("../business.model");
@@ -62,7 +63,18 @@ const upload = multer({
 // first page of a PDF as a small jpg (Cloudinary makes it on the fly)
 const pdfThumb = (url) => url.replace("/upload/", "/upload/pg_1,w_480,c_limit,f_jpg/").replace(/\.pdf$/i, ".jpg");
 const imageThumb = (url) => url.replace("/upload/", "/upload/w_480,c_limit/");
-const fileView = (f) => ({ _id: f._id, title: f.title, kind: f.kind, url: f.url, thumb: f.thumb, bytes: f.bytes });
+// The Cloudinary account refuses plain delivery of PDF files (401 "deny or ACL failure"), so a PDF is opened with a
+// short-lived signed API link (like the notes' downloads). Images keep their plain URL. inline = open in the browser.
+function signedUrl(f, inline = true) {
+  const type = /\/raw\/upload\//.test(f.url || "") ? "raw" : "image";
+  const ext = String(f.url || "").split("?")[0].split("/").pop().split(".").pop().toLowerCase();
+  const expires_at = Math.floor(Date.now() / 1000) + 60 * 60;
+  return cloudinary.utils.private_download_url(f.public_id, type === "raw" ? "" : ext || "pdf", { resource_type: type, type: "upload", attachment: !inline, expires_at });
+}
+const openUrl = (f) => (f.kind === "pdf" && f.public_id ? signedUrl(f) : f.url);
+const fileView = (f) => ({ _id: f._id, title: f.title, kind: f.kind, url: openUrl(f), thumb: f.thumb, bytes: f.bytes });
+// this API's own address (for links on the public page that must come back here)
+const apiUrl = (req) => (process.env.API_PUBLIC_URL || "").trim().replace(/\/+$/, "") || `${req.get("x-forwarded-proto")?.split(",")[0] || req.protocol}://${req.get("x-forwarded-host") || req.get("host")}`;
 
 const EMPTY = () => ({ theme: "classic", color: "", files: [], unlocked_themes: [], headline: "", about: "", skills: [], experience: [], education: [], projects: [], certifications: [], languages: [], published: true, views: 0 });
 
@@ -329,23 +341,49 @@ const route = (prop) => {
   });
 
   // ===================================== PUBLIC =====================================
+  // the published portfolio of a card slug, or null (not found, unpublished, license over, suspended)
+  async function published(rawSlug) {
+    const slug = String(rawSlug || "").toLowerCase();
+    const card = SLUG_RE.test(slug) ? await Namecard.findOne({ slug }).lean() : null;
+    if (!card) return null;
+    const [doc, business, owner, licenses] = await Promise.all([
+      Portfolio.findOne({ business_id: card.business_id }).lean(),
+      Business.findOne({ _id: card.business_id, deleted: false }).select("name status").lean(),
+      Customer.findOne({ _id: card.owner_id, deleted: false }).select("status").lean(),
+      licensesOf(card.business_id),
+    ]);
+    if (!doc || !doc.published || !licenses.portfolio.active || !business?.status || !owner?.status) return null;
+    return { slug, card, doc, business };
+  }
+
+  // GET /api/public/portfolio/:slug/files/:fileId[?download=1] → redirect to the file (a PDF through a fresh signed
+  // link, so the link on the public page never expires)
+  prop.app.get("/api/public/portfolio/:slug/files/:fileId", async (req, res) => {
+    try {
+      const p = await published(req.params.slug);
+      const f = p && (p.doc.files || []).find((x) => String(x._id) === String(req.params.fileId));
+      if (!f) return res.status(404).json({ success: false, message: MSG.off });
+      res.set("Cache-Control", "no-store");
+      res.redirect(302, f.kind === "pdf" && f.public_id ? signedUrl(f, req.query.download !== "1") : f.url);
+    } catch (err) {
+      res.status(500).json({ success: false, message: MSG.server });
+    }
+  });
+
   prop.app.get("/api/public/portfolio/:slug", async (req, res) => {
     try {
-      const slug = String(req.params.slug || "").toLowerCase();
-      const card = SLUG_RE.test(slug) ? await Namecard.findOne({ slug }).lean() : null;
-      if (!card) return res.status(404).json({ success: false, message: MSG.off });
-      const [doc, business, owner, licenses] = await Promise.all([
-        Portfolio.findOne({ business_id: card.business_id }).lean(),
-        Business.findOne({ _id: card.business_id, deleted: false }).select("name status").lean(),
-        Customer.findOne({ _id: card.owner_id, deleted: false }).select("status").lean(),
-        licensesOf(card.business_id),
-      ]);
-      if (!doc || !doc.published || !licenses.portfolio.active || !business?.status || !owner?.status) {
-        return res.status(404).json({ success: false, message: MSG.off });
-      }
+      const p = await published(req.params.slug);
+      if (!p) return res.status(404).json({ success: false, message: MSG.off });
+      const { slug, card, doc, business } = p;
       Portfolio.updateOne({ _id: doc._id }, { $inc: { views: 1 } }).catch(() => {});
       const { _id, owner_id, business_id, views, created_date, __v, unlocked_themes, files, ...content } = doc;
-      content.files = (files || []).map(({ title, kind, url, thumb }) => ({ title, kind, url, thumb }));
+      const base = apiUrl(req);
+      content.files = (files || []).map(({ _id: id, title, kind, url, thumb, public_id }) => ({
+        title,
+        kind,
+        url: kind === "pdf" && public_id ? `${base}/api/public/portfolio/${slug}/files/${id}` : url,
+        thumb,
+      }));
       // a premium theme someone no longer owns (shouldn't happen) falls back to classic
       if (PREMIUM_THEMES.includes(content.theme) && !(unlocked_themes || []).includes(content.theme)) content.theme = "classic";
       res.set("Cache-Control", "public, max-age=30");

@@ -115,11 +115,13 @@ module.exports = (prop) => {
         const customer = await Customer.findOne({ _id: row.account_id, deleted: false });
         if (!customer) return res.status(410).json({ success: false, message: TEXT.expired, code: "qr_expired" });
         if (!customer.status) return res.status(403).json({ success: false, message: MSG.suspended });
+        // logging in again cancels a pending "Delete my account"
+        const cancelled = await require("../user/account_delete").cancelOnLogin(customer);
         customer.last_login_date = new Date();
         await customer.save();
         const wallet = await getCustomerWallet(customer._id);
         const token = await startSession(customer, req);
-        return res.json({ success: true, account_type: "customer", data: loginData(customer, wallet, token) });
+        return res.json({ success: true, account_type: "customer", data: { ...loginData(customer, wallet, token), ...(cancelled ? { deletion_cancelled: true } : {}) }, ...(cancelled ? { deletion_cancelled: true } : {}) });
       }
 
       const member = await User.findOne({ _id: row.account_id, deleted: false });

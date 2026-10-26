@@ -4,4 +4,5 @@
 module.exports = (prop) => {
   require("./user.route")(prop);
   require("./customer.admin.route")(prop);
+  require("./account_delete").routes(prop); // "Delete my account" (30 days to change your mind)
 };
