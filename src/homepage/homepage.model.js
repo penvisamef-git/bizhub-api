@@ -199,6 +199,7 @@ const homepageSchema = new mongoose.Schema(
       ts_remind: { type: Number, default: d.prices.ts_remind, min: 0 }, // cart reminder + order again, yearly
       ts_zones: { type: Number, default: d.prices.ts_zones, min: 0 }, // delivery zones, yearly
       ts_riders: { type: Number, default: d.prices.ts_riders, min: 0 }, // riders group, yearly
+      ts_pos: { type: Number, default: d.prices.ts_pos, min: 0 }, // more staff order screens, yearly
       ts_theme: { type: Number, default: d.prices.ts_theme, min: 0 }, // one store design, forever
       fb_book_slot: { type: Number, default: d.prices.fb_book_slot, min: 0 },
       fb_big_slot: { type: Number, default: d.prices.fb_big_slot, min: 0 },

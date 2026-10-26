@@ -95,6 +95,8 @@ const storeSchema = new Schema(
       link_expires: { type: Date, default: null },
       send_on: { type: String, enum: ["accepted", "ready", "manual"], default: "accepted" }, // when the order goes to the riders
     },
+    // the staff order screen (/pos/tg-store): a 6-digit code pairs a tablet or phone
+    pos: { pair_code: { type: String, default: "" }, pair_expires: { type: Date, default: null } },
     seq: { type: Number, default: 0 }, // order numbers
     web: { type: String, default: "" }, // the website address the owner uses (links + the Telegram button)
   },
@@ -270,7 +272,33 @@ const cartSchema = new Schema(
 cartSchema.index({ business_id: 1, tg_id: 1 }, { unique: true });
 cartSchema.index({ reminded_at: 1, at: 1 });
 
+// the staff order screen (/pos/tg-store): who logs in with a 4-digit PIN, and the paired devices
+const posStaffSchema = new Schema(
+  {
+    ...owned,
+    name: { type: String, required: true, maxlength: 60 },
+    role: { type: String, enum: ["staff", "manager"], default: "staff" }, // manager: also opens / closes the store and sees the day's sales
+    pin_key: { type: String, required: true }, // HMAC of the PIN (unique per shop)
+    pin_v: { type: Number, default: 0 }, // +1 logs them out everywhere
+    active: { type: Boolean, default: true },
+  },
+  opts,
+);
+posStaffSchema.index({ business_id: 1, pin_key: 1 }, { unique: true });
+const posDeviceSchema = new Schema(
+  {
+    ...owned,
+    name: { type: String, default: "Counter", maxlength: 60 },
+    token_hash: { type: String, required: true, unique: true },
+    revoked: { type: Boolean, default: false },
+    last_seen: { type: Date, default: null },
+  },
+  opts,
+);
+
 module.exports = {
+  TgPosStaff: mongoose.models.TgPosStaff || mongoose.model("TgPosStaff", posStaffSchema),
+  TgPosDevice: mongoose.models.TgPosDevice || mongoose.model("TgPosDevice", posDeviceSchema),
   TgCart: mongoose.models.TgCart || mongoose.model("TgCart", cartSchema),
   TgPromo: mongoose.models.TgPromo || mongoose.model("TgPromo", promoSchema),
   TgBroadcast: mongoose.models.TgBroadcast || mongoose.model("TgBroadcast", broadcastSchema),

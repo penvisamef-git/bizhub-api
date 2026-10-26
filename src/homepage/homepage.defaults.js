@@ -172,6 +172,7 @@ const DEFAULT_HOMEPAGE = {
     ts_remind: 20, // cart reminder + order again, per year
     ts_zones: 20, // delivery zones, per year
     ts_riders: 30, // riders group, per year
+    ts_pos: 20, // more staff order screens, per year
     ts_theme: 15, // one store design, forever
     fb_book_slot: 1, // v1.5.5: 5 more books = 5 coins (was 5 each)
     fb_big_slot: 10,

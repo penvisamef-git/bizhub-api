@@ -49,7 +49,7 @@ const TZ = 7;
 const DEFAULT_SITE = "https://bizhub-cambodia.web.app";
 const LIMITS = { products: 500, categories: 40, items: 40, qty: 99, options: 6, choices: 12, promos: 50, broadcastsPerDay: 3, broadcastReach: 500 };
 // add-ons, paid with coins (license products); yearly ones end, the others are forever
-const ADDONS = ["ts_promos", "ts_broadcast", "ts_reports", "ts_hours", "ts_nobrand", "ts_history", "ts_pay", "ts_link", "ts_remind", "ts_zones", "ts_riders"];
+const ADDONS = ["ts_promos", "ts_broadcast", "ts_reports", "ts_hours", "ts_nobrand", "ts_history", "ts_pay", "ts_link", "ts_remind", "ts_zones", "ts_riders", "ts_pos"];
 const HISTORY_DAYS = 60; // orders older than this need ts_history
 const FREE_PAY = 3; // KHQR + Cash + 1 of the owner's own; more (and pictures) = ts_pay
 const THEMES = require("./tgstore.themes");
@@ -1611,6 +1611,9 @@ module.exports = (prop) => {
     }
     return { toast: "✅" };
   });
+
+  // the staff order screen (/pos/tg-store): its own file
+  require("./tgstore.pos")(prop, { M, Bad, MSG, handle, door, licenseState, addonsOf, moveOrder, markPaid, postToRiders, postToGroup, orderOut, productOut, countsOf, openNow, str, validId, fill, money, Business, Customer, siteOf, dayStart, localDay });
 
   // a rider presses a button under an order in the riders' group
   async function riderPress(oid, act, q) {
