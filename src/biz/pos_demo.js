@@ -3,6 +3,7 @@
 //     restaurant              { token, device }                         (same as /api/pos/pair)
 //     mart | guest_house      { token, business }                       (same as /api/martpos|ghpos/pair)
 //     event                   { token, org }                            (same as /api/evdoor/pair; then team PIN login)
+//     tg_store                { token, shop }                           (same as /api/tspos/pair; then staff PIN login)
 //     stamp_card              { slug, shop }                            (the staff desk link; then desk PIN login)
 //     attendance mode=kiosk   { mode, token, business }                 (the door tablet link /k/<token>)
 //     attendance mode=staff   { mode, code, token, business, phone }    (already logged in as the demo staff on device_id)
@@ -23,8 +24,9 @@ const G = require("./guesthouse/guesthouse.models");
 const A = require("./attendance/attendance.models");
 const S = require("./stamp/stamp.models");
 const E = require("./event/event.models");
+const TS = require("./tgstore/tgstore.models");
 
-const KINDS = ["restaurant", "mart", "guest_house", "attendance", "stamp_card", "event"];
+const KINDS = ["restaurant", "mart", "guest_house", "attendance", "stamp_card", "event", "tg_store"];
 const DEMO_PIN = "1234"; // the demo staff PIN (shown in the app, so it is not a secret)
 const DEMO_ATT_PHONE = "+85512000123"; // the demo attendance staff (log in with this phone + DEMO_PIN)
 const KEEP_DAYS = 2;
@@ -76,12 +78,49 @@ async function tidy(kind, bid, now = false) {
     attendance: [A.AttPunch],
     stamp_card: [],
     event: [],
+    tg_store: [TS.TgOrder],
   };
   // tidy every demo business, not only the one opened now
   for (const k of KINDS) {
     const shop = k === kind ? { _id: bid } : await demoShop(k);
     if (!shop) continue;
     for (const Model of jobs[k]) await Model.deleteMany({ business_id: shop._id, created_date: { $lt: before } }).catch(() => {});
+  }
+}
+
+// sample Telegram Store orders for the demo (as if customers ordered)
+const SAMPLE = [
+  { name: "Sok Dara", phone: "012555401", mode: "pickup", note: "Less sugar please" },
+  { name: "Emma Wilson", phone: "012555402", mode: "delivery", address: "Street 240, house 12" },
+  { name: "Chan Vanna", phone: "012555403", mode: "pickup", note: "" },
+];
+async function demoOrders(s, n) {
+  const products = await TS.TgProduct.find({ business_id: s.business_id, deleted: false, hidden: false, sold_out: false }).sort({ sort: 1 }).limit(6).lean();
+  if (!products.length) return;
+  for (let i = 0; i < n; i += 1) {
+    const who = SAMPLE[(Date.now() / 1000 + i) % SAMPLE.length | 0];
+    const picks = [products[i % products.length], products[(i + 2) % products.length]].filter((p, k, a) => a.findIndex((x) => String(x._id) === String(p._id)) === k);
+    const items = picks.map((p, k) => ({ product_id: p._id, name: p.name, price: p.price, qty: k + 1, options: [], note: "", total: Math.round(p.price * (k + 1) * 100) / 100 }));
+    const subtotal = Math.round(items.reduce((a, l) => a + l.total, 0) * 100) / 100;
+    const fee = who.mode === "delivery" ? 1 : 0;
+    const seq = await TS.TgStore.findOneAndUpdate({ _id: s._id }, { $inc: { seq: 1 } }, { returnDocument: "after" }).select("seq").lean();
+    await TS.TgOrder.create({
+      business_id: s.business_id,
+      no: seq.seq,
+      token: crypto.randomBytes(18).toString("base64url").replace(/[-_]/g, "").slice(0, 24),
+      mode: who.mode,
+      address: who.address || "",
+      note: who.note,
+      customer: { tg_id: "", username: "", name: who.name, phone: who.phone },
+      items,
+      subtotal,
+      fee,
+      total: Math.round((subtotal + fee) * 100) / 100,
+      currency: s.currency || "USD",
+      pay: { method: "cash", status: "unpaid" },
+      timeline: [{ status: "new", at: new Date(), by: who.name }],
+      via: "web",
+    });
   }
 }
 
@@ -107,6 +146,15 @@ const LINK = {
     const { token } = await demoDevice(E.EvDevice, "event", business, async () => ({ name: b.name }));
     const s = await E.EvSettings.findOne({ business_id: business._id }).lean();
     return { token, org: { name: s?.org_name || business.name, logo: s?.logo?.url || "" } };
+  },
+  // Telegram Store staff screen: the shared demo screen; a couple of orders waiting, so there is something to accept
+  async tg_store(business, b) {
+    const s = await TS.TgStore.findOne({ business_id: business._id });
+    if (!s) throw new Off();
+    const { token } = await demoDevice(TS.TgPosDevice, "tg_store", business, async () => ({ name: b.name }));
+    const open = await TS.TgOrder.countDocuments({ business_id: business._id, status: { $in: ["new", "accepted", "ready", "on_way"] } });
+    if (open < 2) await demoOrders(s, 3 - open);
+    return { token, shop: { name: s.shop_name || business.name, logo: s.logo?.url || "", color: s.color || "", theme: s.theme || "" } };
   },
   async stamp_card(business) {
     const p = await S.StampProgram.findOne({ business_id: business._id }).lean();

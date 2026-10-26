@@ -13,6 +13,8 @@
 //   Lucky Team (attendance, made here if missing): a branch with the door kiosk, 4 staff (demo staff +85512000123)
 //   Mekong Coffee Stamps (stamp_card, made here if missing): the staff desk on (PIN 1234), 4 customers with stamps
 //   Khmer New Year Party (event): a free event 30 days ahead with an Entry ticket, a door team member, 5 guests
+//   Mekong Coffee Shop (tg_store, made here if missing): 2 categories, 8 products, pickup + delivery, cash,
+//     the staff screen "Demo Manager" (manager, PIN 1234); "Try demo" adds a few orders to accept
 // The staff on every shop is "Demo Manager" with PIN 1234 (the PIN the app shows on "Try demo").
 // It goes through the owner API (the same checks as the website), and only adds what is missing, so it is
 // safe to run again.
@@ -181,7 +183,7 @@ const ok = (c, m, extra) => {
     console.error(`No account ${EMAIL}. Run scripts/demo-reviewer.js first.`);
     process.exit(1);
   }
-  const KINDS = ["restaurant", "mart", "guest_house", "attendance", "stamp_card", "event"];
+  const KINDS = ["restaurant", "mart", "guest_house", "attendance", "stamp_card", "event", "tg_store"];
   const findShops = async () => Object.fromEntries((await Business.find({ owner_id: owner._id, deleted: false, category: { $in: KINDS } }).sort({ created_date: 1 }).lean()).reverse().map((b) => [b.category, b]));
   let shops = await findShops();
 
@@ -210,7 +212,7 @@ const ok = (c, m, extra) => {
 
   try {
     // ---------------- the businesses the reviewer account does not have yet (paid with its coins, like an owner) ----------------
-    const MAKE = { attendance: { name: "Lucky Team", phone: "012 345 683", address: "Toul Kork, Phnom Penh" }, stamp_card: { name: "Mekong Coffee Stamps", phone: "012 345 684", address: "Riverside, Phnom Penh" } };
+    const MAKE = { attendance: { name: "Lucky Team", phone: "012 345 683", address: "Toul Kork, Phnom Penh" }, stamp_card: { name: "Mekong Coffee Stamps", phone: "012 345 684", address: "Riverside, Phnom Penh" }, tg_store: { name: "Mekong Coffee Shop", phone: "012 345 685", address: "Riverside, Phnom Penh" } };
     const coin = require("../src/coin/coin.service");
     const { priceOf } = require("../src/homepage/prices");
     const missingKinds = Object.keys(MAKE).filter((k) => !shops[k]);
@@ -343,6 +345,26 @@ const ok = (c, m, extra) => {
       }
     }
 
+    // ---------------- telegram store ----------------
+    if (shops.tg_store) {
+      const TSB = `/api/user/businesses/${shops.tg_store._id}/tgstore`;
+      const ov = (await own("GET", TSB)).data;
+      if (!ov.store.about) await doIt("telegram store: shop details, pickup + delivery, cash", () => own("PUT", `${TSB}/settings`, { shop_name: "Mekong Coffee Shop", about: "Coffee, tea & cakes · 7:00–21:00", delivery: { on: true, fee: 1, free_from: 15, min_order: 0 }, pickup: { on: true }, pay: { cash: { on: true } } }));
+      const cats = (await own("GET", `${TSB}/categories`)).data;
+      if (!cats.length)
+        await doIt("telegram store: 2 categories + 8 products", async () => {
+          const coffee = (await own("POST", `${TSB}/categories`, { name: "Coffee & tea", name_km: "កាហ្វេ និងតែ" })).data;
+          const cake = (await own("POST", `${TSB}/categories`, { name: "Cakes", name_km: "នំ" })).data;
+          for (const [name, name_km, price, cat] of [
+            ["Iced latte", "ឡាតេទឹកកក", 2.5, coffee], ["Iced Americano", "អាមេរិកាណូទឹកកក", 1.75, coffee], ["Khmer iced coffee", "កាហ្វេទឹកដោះគោ", 1.5, coffee], ["Green tea latte", "តែបៃតង", 2.25, coffee], ["Passion fruit soda", "សូដាផាសិន", 2, coffee],
+            ["Butter croissant", "នំក្រូសង់", 1.8, cake], ["Chocolate cake", "នំសូកូឡា", 2.5, cake], ["Banana bread", "នំចេក", 1.5, cake],
+          ]) // prettier-ignore
+            await own("POST", `${TSB}/products`, { name, name_km, price, category_id: cat._id });
+        });
+      const pos = (await own("GET", `${TSB}/pos`)).data;
+      if (!pos.staff.some((s) => s.name === STAFF)) await doIt(`telegram store: staff screen ${STAFF} (manager, PIN ${PIN})`, () => own("POST", `${TSB}/pos/staff`, { name: STAFF, role: "manager", pin: PIN }));
+    }
+
     console.log(`\n${write ? "Added" : "Would add"} (${plan.length}):`);
     for (const p of plan) console.log("  •", p);
     if (!write) console.log("\nDry run. Run again with --yes to write this to production.");
@@ -427,6 +449,20 @@ const ok = (c, m, extra) => {
       r = await call("GET", "/api/evdoor/boot", null, { "x-ev-device": et, "x-ev-session": r.j.data?.session });
       const evs = r.j.data?.events || [];
       ok(r.s === 200 && evs.length === 1 && evs[0].tickets === 9, "event: boot has the event with 9 tickets", { s: r.s, n: evs.length, t: evs[0]?.tickets, m: r.j.message });
+
+      // telegram store staff screen
+      r = await call("POST", "/api/public/pos-demo", { kind: "tg_store" });
+      const tst = r.j.data?.token;
+      ok(r.s === 200 && /^[a-f0-9]{64}$/.test(tst) && r.j.data.shop?.name === "Mekong Coffee Shop" && r.j.data.pin === PIN, "tg_store: screen token + shop + PIN", r.j);
+      r = await call("POST", "/api/tspos/login", { pin: PIN }, { "x-ts-device": tst });
+      ok(r.s === 200 && r.j.data?.session && r.j.data.staff.role === "manager", "tg_store: staff PIN 1234 logs in (manager)", r.j);
+      const tsh = { "x-ts-device": tst, "x-ts-session": r.j.data?.session };
+      r = await call("GET", "/api/tspos/orders", null, tsh);
+      ok(r.s === 200 && r.j.data.length === 3 && r.j.data.every((o) => o.status === "new"), "tg_store: 3 sample orders waiting", { n: r.j.data?.length });
+      r = await call("POST", "/api/public/pos-demo", { kind: "tg_store" });
+      ok(r.j.data?.token === tst, "tg_store: the same demo screen again (no new device)");
+      r = await call("GET", "/api/tspos/orders", null, tsh);
+      ok(r.j.data.length === 3, "tg_store: no extra orders while 3 are open");
 
       // old demo data is tidied, new data stays
       const MM = require("../src/biz/mart/mart.models");
