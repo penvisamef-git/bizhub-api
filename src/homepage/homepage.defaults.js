@@ -166,6 +166,10 @@ const DEFAULT_HOMEPAGE = {
     ts_reports: 20, // sales report + Excel, per year
     ts_hours: 10, // opening hours, forever
     ts_nobrand: 20, // no BizHub name, forever
+    ts_history: 45, // every order, not only the last 60 days, forever
+    ts_pay: 10, // more ways to pay + picture / QR, forever
+    ts_link: 20, // own link name + QR style, forever
+    ts_theme: 15, // one store design, forever
     fb_book_slot: 1, // v1.5.5: 5 more books = 5 coins (was 5 each)
     fb_big_slot: 10,
     fb_categories: 100,

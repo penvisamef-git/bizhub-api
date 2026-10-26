@@ -17,7 +17,7 @@ const storeSchema = new Schema(
     address: { type: String, default: "", maxlength: 200 },
     about: { type: String, default: "", maxlength: 300 }, // one line under the name (hours, promo…)
     logo: photo,
-    color: { type: String, default: "#C4470F" },
+    color: { type: String, default: "" }, // "" = the colour of the design
     currency: { type: String, enum: ["USD", "KHR"], default: "USD" },
     open: { type: Boolean, default: true }, // closed → people can look, not order
     delivery: {
@@ -32,7 +32,23 @@ const storeSchema = new Schema(
     pay: {
       khqr: { on: { type: Boolean, default: false }, bakong_id: { type: String, default: "", maxlength: 60 }, account_name: { type: String, default: "", maxlength: 40 } },
       cash: { on: { type: Boolean, default: true } },
+      // the owner's own ways to pay: "ABA 000 123 456", "Wing", a bank QR picture (more + pictures = add-on ts_pay)
+      custom: {
+        type: [
+          {
+            name: { type: String, required: true, maxlength: 40 },
+            info: { type: String, default: "", maxlength: 300 },
+            image: photo,
+            on: { type: Boolean, default: true },
+          },
+        ],
+        default: [],
+      },
     },
+    theme: { type: String, default: "grid-cream" }, // one of tgstore.themes.js
+    channel_text: { type: String, default: "", maxlength: 600 }, // the post for the owner's channel ("" = ours); {name} {link}
+    qr: { fg: { type: String, default: "#1F1A16" }, bg: { type: String, default: "#FFFFFF" }, logo: { type: Boolean, default: false } }, // add-on ts_link
+    old_slugs: { type: [String], default: [] }, // links that still work after renaming (add-on ts_link)
     // the staff's Telegram group (or the owner's chat): new orders with Accept / Reject buttons
     tg: {
       chat_id: { type: String, default: "" },
@@ -107,6 +123,8 @@ const customerSchema = new Schema(
     phone: { type: String, default: "", maxlength: 20 },
     address: { type: String, default: "", maxlength: 200 },
     can_message: { type: Boolean, default: false }, // the bot may send them their order updates
+    note: { type: String, default: "", maxlength: 300 }, // the owner's own note ("likes less sugar")
+    placed: { type: Number, default: 0 }, // orders sent (done or not)
     orders: { type: Number, default: 0 },
     spent: { type: Number, default: 0 },
     last_order_at: { type: Date, default: null },
@@ -148,7 +166,8 @@ const orderSchema = new Schema(
     total: { type: Number, default: 0 },
     currency: { type: String, default: "USD" },
     pay: {
-      method: { type: String, enum: ["khqr", "cash"], default: "cash" },
+      method: { type: String, enum: ["khqr", "cash", "custom"], default: "cash" },
+      custom: { id: String, name: String, info: String, image: String }, // the owner's own way to pay, as it was when ordering
       status: { type: String, enum: ["unpaid", "proof", "paid"], default: "unpaid" },
       proof: photo, // a screenshot of the payment the customer sent
       paid_at: { type: Date, default: null },

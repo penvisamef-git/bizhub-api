@@ -12,6 +12,10 @@ const PRODUCTS = {
   ts_reports: { price_key: "ts_reports", days: 365, category: "tg_store", service: "ts_reports" }, // sales report + Excel, yearly
   ts_hours: { price_key: "ts_hours", days: null, category: "tg_store", service: "ts_hours" }, // opening hours: opens / closes by itself, forever
   ts_nobrand: { price_key: "ts_nobrand", days: null, category: "tg_store", service: "ts_nobrand" }, // no "Made with BizHub" on the store, forever
+  ts_history: { price_key: "ts_history", days: null, category: "tg_store", service: "ts_history" }, // see every order, not only the last 60 days, forever
+  ts_pay: { price_key: "ts_pay", days: null, category: "tg_store", service: "ts_pay" }, // more ways to pay + a picture / QR for each, forever
+  ts_link: { price_key: "ts_link", days: null, category: "tg_store", service: "ts_link" }, // own store link name + QR colours and logo, forever
+  ts_theme: { price_key: "ts_theme", days: null, category: "tg_store", service: "ts_theme", item: true }, // one store design, forever
   // Team access (v1.5): other BizHub accounts open this business as Admin / View only. Any business type, yearly.
   team: { price_key: "team_year", days: 365, category: "*", service: "team" },
   no_branding: { price_key: "remove_branding", days: null, category: "namecard", service: "namecard_branding", retired: true }, // "Made with BizHub" is gone for everyone

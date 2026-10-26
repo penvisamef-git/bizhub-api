@@ -300,11 +300,92 @@ const ok = (c, m, extra) => {
   r = await buyAddon("ts_nobrand");
   r = await call("GET", "/api/public/tgstore/sokha-cafe", null, { auth: false });
   ok(r.j.data.store.brand === false, "No BizHub name: the store hides it");
+
+  // order history: the last 60 days unless ts_history
+  const old1 = await M.TgOrder.findOne({ business_id: bid }).sort({ created_date: 1 });
+  await M.TgOrder.collection.updateOne({ _id: old1._id }, { $set: { created_date: new Date(Date.now() - 90 * 86400e3) } });
+  r = await call("GET", `${B}/orders?status=all`);
+  ok(r.s === 200 && !r.j.data.some((o) => String(o._id) === String(old1._id)) && r.j.history.all === false && r.j.history.hidden === 1, "history: a 90-day-old order is hidden (60 days)", r.j.history);
+  r = await call("GET", `${B}/orders?status=all&from=2020-01-01`);
+  ok(!r.j.data.some((o) => String(o._id) === String(old1._id)), "…even asking from 2020");
+  r = await call("GET", `${B}/orders?status=all&q=Bopha`);
+  ok(r.j.data.length >= 1 && r.j.data.every((o) => o.customer.name === "Bopha") && r.j.sum > 0, "search by name + the sum", r.j.sum);
+  r = await call("GET", `${B}/orders?status=all&pay=cash&mode=pickup`);
+  ok(r.j.data.every((o) => o.pay.method === "cash" && o.mode === "pickup"), "filter by how + pay");
+  r = await buyAddon("ts_history");
+  ok(r.j.success && r.j.charged === 45 && r.j.data.forever, "buy Full history: 45 coins, forever", r.j);
+  r = await call("GET", `${B}/orders?status=all&limit=100`);
+  ok(r.j.data.some((o) => String(o._id) === String(old1._id)) && r.j.history.all === true, "now every order shows");
+
+  // customers
+  r = await call("GET", `${B}/customers?sort=spent`);
+  ok(r.s === 200 && r.j.stats.all >= 2 && r.j.stats.telegram >= 1 && r.j.data[0].spent >= r.j.data.at(-1).spent && r.j.data[0].placed >= 1, "customers: stats + sorted by spent", r.j.stats);
+  const cid = r.j.data.find((c) => c.name === "Bopha")._id;
+  r = await call("GET", `${B}/customers/${cid}`);
+  ok(r.s === 200 && r.j.data.orders.length >= 1 && r.j.data.favourites[0]?.name, "one customer: their orders + favourites", r.j.data?.favourites);
+  r = await call("PUT", `${B}/customers/${cid}`, { note: "Less sugar" });
+  ok(r.j.data.note === "Less sugar", "a note on the customer");
+  r = await call("GET", `${B}/customers?q=sugar`);
+  ok(r.j.data.length === 1, "search finds the note");
+
+  // ways to pay
+  r = await call("POST", `${B}/pay-methods`, { name: "ABA", info: "000 123 456 · SOKHA" });
+  ok(r.s === 201 && r.j.data.length === 1, "1 own way to pay is free (KHQR + Cash + ABA = 3)");
+  const aba = r.j.data[0]._id;
+  r = await call("POST", `${B}/pay-methods`, { name: "Wing" });
+  ok(r.s === 402 && r.j.product === "ts_pay", "a 4th needs More ways to pay", r.j);
+  const fd = new FormData();
+  fd.append("image", new Blob([Buffer.from("iVBORw0KGgo=", "base64")], { type: "image/png" }), "qr.png");
+  let up = await fetch(`${base}${B}/pay-methods/${aba}/image`, { method: "POST", headers: { "x-api-key": "k", authorization: `Bearer ${tok}` }, body: fd });
+  ok(up.status === 402, "a QR picture needs it too");
+  r = await buyAddon("ts_pay");
+  ok(r.j.success && r.j.charged === 10, "buy More ways to pay: 10 coins");
+  r = await call("POST", `${B}/pay-methods`, { name: "Wing", info: "012 345 678" });
+  ok(r.s === 201 && r.j.data.length === 2, "now a 4th way works");
+  r = await call("GET", "/api/public/tgstore/sokha-cafe", null, { auth: false });
+  ok(r.j.data.store.pay.custom.length === 2 && r.j.data.store.pay.custom[0].info.includes("000 123"), "customers see ABA + Wing");
+  r = await call("POST", P, { mode: "pickup", items: [{ product_id: latte._id, qty: 1, options: [{ group: "Size", choice: "Large" }] }], name: "Bopha", phone: "011222333", pay: `custom:${aba}` }, { auth: false });
+  po = r.s === 201 && (await M.TgOrder.findOne({ token: r.j.data.token }).lean());
+  ok(po && po.pay.method === "custom" && po.pay.custom.name === "ABA", "an order paid with ABA", r.j);
+  r = await call("GET", `/api/public/tgstore/order/${po.token}`, null, { auth: false });
+  ok(r.j.data.order.pay.custom?.info.includes("000 123") && r.j.data.khqr === null, "the order page shows how to pay ABA");
+
+  // designs
+  r = await call("GET", B);
+  ok(r.j.data.themes.count === 120 && r.j.data.themes.free.length === 3 && r.j.data.themes.price === 15 && r.j.data.store.theme === "grid-cream", "120 designs, 3 free, 15 coins each", r.j.data.themes);
+  r = await call("POST", `${B}/themes/list-snow`);
+  ok(r.j.success && r.j.charged === 0 && r.j.data.theme === "list-snow", "a free design: no coins");
+  r = await call("POST", `${B}/themes/nope-x`);
+  ok(r.s === 400, "an unknown design is refused");
+  r = await call("POST", `${B}/themes/magazine-night`);
+  ok(r.j.success && r.j.charged === 15, "a premium design: 15 coins", r.j);
+  r = await call("GET", "/api/public/tgstore/sokha-cafe?theme=bubble-rose", null, { auth: false });
+  ok(r.j.data.store.theme === "bubble-rose" && r.j.data.store.preview === true, "?theme= shows a preview");
+  r = await call("GET", "/api/public/tgstore/sokha-cafe", null, { auth: false });
+  ok(r.j.data.store.theme === "magazine-night", "customers see the bought design");
+
+  // channel text, own link + QR
+  r = await call("PUT", `${B}/settings`, { channel_text: "☕ {name}: order here {link}" });
+  ok(r.j.data.store.channel_text === "☕ {name}: order here {link}", "the channel post wording is saved");
+  r = await call("PUT", `${B}/link`, { slug: "sokha" });
+  ok(r.s === 402 && r.j.product === "ts_link", "own link needs the add-on");
+  r = await call("PUT", `${B}/settings`, { qr: { fg: "#0B77C2" } });
+  ok(r.s === 402, "QR colours need it too");
+  r = await buyAddon("ts_link");
+  ok(r.j.success && r.j.charged === 20, "buy Own link & QR: 20 coins");
+  r = await call("PUT", `${B}/link`, { slug: "a" });
+  ok(r.s === 400 && r.j.code === "bad_slug", "a too short link is refused");
+  r = await call("PUT", `${B}/link`, { slug: "sokha-coffee" });
+  ok(r.s === 200 && r.j.data.links.telegram.endsWith("st_sokha-coffee") && r.j.data.links.web.endsWith("/t/sokha-coffee"), "renamed to sokha-coffee", r.j.data);
+  r = await call("GET", "/api/public/tgstore/sokha-cafe", null, { auth: false });
+  ok(r.s === 200 && r.j.data.store.slug === "sokha-coffee", "the old link still opens the store");
+  r = await call("PUT", `${B}/settings`, { qr: { fg: "#0B77C2", bg: "#FFFFFF", logo: true } });
+  ok(r.j.data.store.qr.fg === "#0B77C2" && r.j.data.store.qr.logo === true, "QR colours + logo saved");
   globalThis.fetch = fetch0;
 
   console.log("\nlocked");
   await require("../src/license/license.model").updateOne({ business_id: bid, product: "tg_store" }, { $set: { expires_at: new Date(Date.now() - 10 * 86400e3) } });
-  r = await call("GET", "/api/public/tgstore/sokha-cafe", null, { auth: false });
+  r = await call("GET", "/api/public/tgstore/sokha-coffee", null, { auth: false });
   ok(r.s === 404 && r.j.code === "off", "after the year + 7 days the store is closed to customers");
   r = await call("POST", `${B}/products`, { name: "New", price: 1 });
   ok(r.s === 402, "and the owner can't change it until renewing");

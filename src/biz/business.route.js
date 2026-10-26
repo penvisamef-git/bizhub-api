@@ -88,7 +88,8 @@ async function listFor(ownerId) {
   const qgIds = rows.filter((b) => b.category === "qr_gen").map((b) => b._id);
   const wsIds = rows.filter((b) => b.category === "website").map((b) => b._id);
   const scIds = rows.filter((b) => b.category === "stamp_card").map((b) => b._id);
-  const [cards, licenses, rest, menus, shelves, qrs, sites, stamps] = await Promise.all([
+  const tsIds = rows.filter((b) => b.category === "tg_store").map((b) => b._id);
+  const [cards, licenses, rest, menus, shelves, qrs, sites, stamps, tgStores] = await Promise.all([
     Namecard.find({ business_id: { $in: ids } })
       .select("business_id slug views published photo")
       .lean(),
@@ -129,6 +130,12 @@ async function listFor(ownerId) {
           .select("business_id logo")
           .lean()
       : [],
+    tsIds.length
+      ? require("./tgstore/tgstore.models")
+          .TgStore.find({ business_id: { $in: tsIds } })
+          .select("business_id logo")
+          .lean()
+      : [],
   ]);
   return rows.map((b) => {
     const card = cards.find((c) => String(c.business_id) === String(b._id));
@@ -140,7 +147,8 @@ async function listFor(ownerId) {
     const ws = sites.find((x) => String(x.business_id) === String(b._id));
     if (ws) out.website = { slug: ws.slug, published: !!ws.published };
     const sc = stamps.find((x) => String(x.business_id) === String(b._id));
-    out.photo = card?.photo?.url || r?.logo?.url || mq?.logo?.url || fb?.logo?.url || ws?.logo || sc?.logo || b.logo_url || ""; // one picture for any type
+    const ts = tgStores.find((x) => String(x.business_id) === String(b._id));
+    out.photo = card?.photo?.url || r?.logo?.url || mq?.logo?.url || fb?.logo?.url || ws?.logo || sc?.logo || ts?.logo?.url || b.logo_url || ""; // one picture for any type
     if (YEARLY_TYPES.includes(b.category)) out.license = statusOf(licenses.find((l) => String(l.business_id) === String(b._id) && l.product === b.category));
     return out;
   });

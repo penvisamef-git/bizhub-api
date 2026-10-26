@@ -30,7 +30,7 @@ const Business = require("../business.model");
 const { bizOwner } = require("../team/team.access"); // team members (Admin / View only) open it too
 const Customer = require("../../user/customer.model");
 const License = require("../../license/license.model");
-const { statusOf, DAY } = require("../../license/license.service");
+const { statusOf, buy, LicenseError, DAY } = require("../../license/license.service");
 const { PRODUCTS } = require("../../license/license.products");
 const { priceOf } = require("../../homepage/prices");
 const { customer_auth } = require("../../user/customer_auth");
@@ -45,7 +45,10 @@ const TZ = 7;
 const DEFAULT_SITE = "https://bizhub-cambodia.web.app";
 const LIMITS = { products: 500, categories: 40, items: 40, qty: 99, options: 6, choices: 12, promos: 50, broadcastsPerDay: 3, broadcastReach: 500 };
 // add-ons, paid with coins (license products); yearly ones end, the others are forever
-const ADDONS = ["ts_promos", "ts_broadcast", "ts_reports", "ts_hours", "ts_nobrand"];
+const ADDONS = ["ts_promos", "ts_broadcast", "ts_reports", "ts_hours", "ts_nobrand", "ts_history", "ts_pay", "ts_link"];
+const HISTORY_DAYS = 60; // orders older than this need ts_history
+const FREE_PAY = 3; // KHQR + Cash + 1 of the owner's own; more (and pictures) = ts_pay
+const THEMES = require("./tgstore.themes");
 const MSG = {
   server: "ម៉ាសុីនមេមានបញ្ហា សូមព្យាយាមម្តងទៀតពេលក្រោយ! / Server problem, please try again later.",
   badId: "មិនមាន ID ត្រឹមត្រូវ! / Wrong ID.",
@@ -93,6 +96,12 @@ const MSG = {
   broadcastLimit: "អ្នកផ្ញើបាន {n} ដងក្នុងមួយថ្ងៃ។ សូមព្យាយាមថ្ងៃស្អែក។ / You can send {n} times a day. Try again tomorrow.",
   noReach: "មិនទាន់មានអតិថិជនដែលអនុញ្ញាតឲ្យផ្ញើសារទេ។ / No customers allowed messages yet.",
   broadcastSent: "បានផ្ញើទៅ {n} នាក់! / Sent to {n} people.",
+  badTheme: "រចនានេះមិនមានទេ! / This design doesn't exist.",
+  needTheme: "សូមទិញរចនានេះជាមុនសិន។ / Buy this design first.",
+  payLimit: "បើក “វិធីបង់ប្រាក់បន្ថែម” ដើម្បីបន្ថែមទៀត។ / Unlock “More ways to pay” to add more.",
+  payImage: "បើក “វិធីបង់ប្រាក់បន្ថែម” ដើម្បីដាក់រូប QR។ / Unlock “More ways to pay” to add a QR picture.",
+  badSlug: "តំណ៖ អក្សរ a–z លេខ និង - (3–30)! / Link: 3–30 letters a–z, numbers and -.",
+  slugTaken: "តំណនេះមានអ្នកប្រើហើយ! / This link is taken.",
 };
 class Bad extends Error {
   constructor(message, status = 400, extra = {}) {
@@ -186,6 +195,10 @@ async function addonsOf(businessId) {
   for (const key of ADDONS) out[key] = statusOf(rows.find((r) => r.product === key));
   return out;
 }
+async function themesOf(businessId) {
+  const rows = await License.find({ business_id: businessId, product: "ts_theme", item: { $nin: ["", null] } }).lean();
+  return [...THEMES.FREE, ...rows.filter((r) => statusOf(r).active).map((r) => r.item)];
+}
 const needAddon = (ctx, key) => {
   if (!ctx.addons?.[key]?.active) throw new Bad(MSG.needAddon, 402, { product: key, code: "addon" });
 };
@@ -266,7 +279,8 @@ const storeOut = (s) => {
   const tg = { connected: !!o.tg?.chat_id, chat_name: o.tg?.chat_name || "" };
   delete o.tg;
   delete o.seq;
-  return { ...o, logo: o.logo?.url || "", tg };
+  const pay = { ...o.pay, custom: (o.pay?.custom || []).map((m) => ({ _id: m._id, name: m.name, info: m.info, image: m.image?.url || "", on: m.on })) };
+  return { ...o, pay, logo: o.logo?.url || "", tg };
 };
 const categoryOut = (c) => ({ _id: c._id, name: c.name, name_km: c.name_km, sort: c.sort });
 const productOut = (p) => ({
@@ -298,7 +312,7 @@ const orderOut = (o, full = false) => ({
   fee: o.fee,
   total: o.total,
   currency: o.currency,
-  pay: { method: o.pay?.method, status: o.pay?.status, proof: o.pay?.proof?.url || "", paid_at: o.pay?.paid_at || null },
+  pay: { method: o.pay?.method, status: o.pay?.status, proof: o.pay?.proof?.url || "", paid_at: o.pay?.paid_at || null, custom: o.pay?.method === "custom" ? { name: o.pay.custom?.name || "", info: o.pay.custom?.info || "", image: o.pay.custom?.image || "" } : null },
   status: o.status,
   eta_min: o.eta_min,
   reason: o.reason,
@@ -315,13 +329,18 @@ const lookOut = (s) => ({
   address: s.address,
   about: s.about,
   logo: s.logo?.url || "",
-  color: hexColor(s.color) || "#C4470F",
+  color: hexColor(s.color) || "",
   currency: s.currency,
   open: !!s.open,
   delivery: s.delivery?.on ? { fee: s.delivery.fee || 0, free_from: s.delivery.free_from || 0, min_order: s.delivery.min_order || 0, note: s.delivery.note || "" } : null,
   pickup: s.pickup?.on ? { note: s.pickup.note || "" } : null,
   dine_in: s.dine_in?.on ? { tables: s.dine_in.tables || 10 } : null,
-  pay: { khqr: !!(s.pay?.khqr?.on && khqr.isBakongId(s.pay.khqr.bakong_id)), cash: !!s.pay?.cash?.on },
+  pay: {
+    khqr: !!(s.pay?.khqr?.on && khqr.isBakongId(s.pay.khqr.bakong_id)),
+    cash: !!s.pay?.cash?.on,
+    custom: (s.pay?.custom || []).filter((m) => m.on).map((m) => ({ _id: m._id, name: m.name, info: m.info, image: m.image?.url || "" })),
+  },
+  theme: THEMES.KEYS.includes(s.theme) ? s.theme : THEMES.DEFAULT,
 });
 
 // ---------- Telegram messages ----------
@@ -344,7 +363,7 @@ function groupText(s, o) {
   ];
   if (o.discount) lines.push(`🏷 ${esc(o.promo)} −${fmtMoney(o.discount, cur)}`);
   if (o.fee) lines.push(`Delivery · ដឹក ${fmtMoney(o.fee, cur)}`);
-  lines.push(`<b>Total · សរុប ${fmtMoney(o.total, cur)}</b> · ${o.pay.method === "khqr" ? "KHQR" : "Cash · សាច់ប្រាក់"} · ${PAY[o.pay.status]}`, "");
+  lines.push(`<b>Total · សរុប ${fmtMoney(o.total, cur)}</b> · ${o.pay.method === "khqr" ? "KHQR" : o.pay.method === "custom" ? esc(o.pay.custom?.name || "") : "Cash · សាច់ប្រាក់"} · ${PAY[o.pay.status]}`, "");
   const who = [o.customer?.name && `<b>${esc(o.customer.name)}</b>`, o.customer?.phone && esc(o.customer.phone), o.customer?.username && `@${esc(o.customer.username)}`].filter(Boolean).join(" · ");
   if (who) lines.push(`👤 ${who}`);
   if (o.mode === "delivery" && o.address) lines.push(`📍 ${esc(o.address)}`);
@@ -489,6 +508,7 @@ module.exports = (prop) => {
       await fn(req, res);
     } catch (err) {
       if (err instanceof Bad) return res.status(err.status).json({ success: false, message: err.message, ...err.extra });
+      if (err instanceof LicenseError) return res.status(err.status).json({ success: false, message: err.message, code: err.message, ...err.extra });
       if (err?.name === "ValidationError" || err?.name === "CastError") return res.status(400).json({ success: false, message: MSG.badValue });
       console.error("[tgstore]", err);
       res.status(500).json({ success: false, message: MSG.server });
@@ -506,7 +526,7 @@ module.exports = (prop) => {
       if (license.read_only) throw new Bad(MSG.locked, 402, { product: PRODUCT });
     }
     const store = await storeOf(business);
-    return { business, store, license, addons, who: req.customer.name || "Owner" };
+    return { business, store, license, addons, themes: await themesOf(business._id), who: req.customer.name || "Owner" };
   }
   const door = (method, path, o, fn, mw = []) =>
     prop.app[method](
@@ -566,6 +586,9 @@ module.exports = (prop) => {
         khqr_auto: khqr.configured(),
         addons,
         open_now: openNow(ctx.store, ctx.license, ctx.addons),
+        themes: { owned: ctx.themes, free: THEMES.FREE, price: await priceOf("ts_theme"), count: THEMES.KEYS.length },
+        history: { days: HISTORY_DAYS, all: !!ctx.addons.ts_history.active },
+        pay_free: FREE_PAY,
       },
     });
   });
@@ -577,7 +600,14 @@ module.exports = (prop) => {
     if (b.phone !== undefined) s.phone = str(b.phone, 40);
     if (b.address !== undefined) s.address = str(b.address, 200);
     if (b.about !== undefined) s.about = str(b.about, 300);
-    if (b.color !== undefined) s.color = hexColor(b.color) || "#C4470F";
+    if (b.color !== undefined) s.color = b.color === "" ? "" : hexColor(b.color) || s.color; // "" = the design's own colour
+    if (b.channel_text !== undefined) s.channel_text = str(b.channel_text, 600);
+    if (b.qr) {
+      needAddon(ctx, "ts_link");
+      if (b.qr.fg !== undefined) s.qr.fg = hexColor(b.qr.fg) || "#1F1A16";
+      if (b.qr.bg !== undefined) s.qr.bg = hexColor(b.qr.bg) || "#FFFFFF";
+      if (b.qr.logo !== undefined) s.qr.logo = !!b.qr.logo;
+    }
     if (b.currency !== undefined) s.currency = b.currency === "KHR" ? "KHR" : "USD";
     if (b.open !== undefined) s.open = !!b.open;
     const cur = s.currency;
@@ -740,22 +770,50 @@ module.exports = (prop) => {
 
   // ---------------------------------------- orders ----------------------------------------
   const OPEN = ["new", "accepted", "ready", "on_way"];
+  // the orders: open ones (oldest first), or the history with filters. Without ts_history only the last 60 days.
+  const historyFrom = (ctx) => (ctx.addons.ts_history.active ? null : dayStart(localDay(new Date(Date.now() - (HISTORY_DAYS - 1) * DAY))));
   door("get", "/orders", {}, async (ctx, req, res) => {
     const st = String(req.query.status || "open");
     const q = { business_id: ctx.business._id };
     if (st === "open") q.status = { $in: OPEN };
-    else if (["done", "cancelled"].includes(st)) q.status = st;
+    else if (M.STATUSES.includes(st)) q.status = st;
+    const text = str(req.query.q, 60);
+    if (text) {
+      const re = new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      const no = Number(text.replace(/^#/, ""));
+      q.$or = [{ "customer.name": re }, { "customer.phone": re }, { "customer.username": re }, ...(Number.isInteger(no) && no > 0 ? [{ no }] : [])];
+    }
+    if (["delivery", "pickup", "dine_in"].includes(req.query.mode)) q.mode = req.query.mode;
+    if (["khqr", "cash", "custom"].includes(req.query.pay)) q["pay.method"] = req.query.pay;
+    if (req.query.paid === "yes") q["pay.status"] = "paid";
+    if (req.query.paid === "no") q["pay.status"] = { $ne: "paid" };
+    if (validId(req.query.customer)) q.customer_id = req.query.customer;
+    const min = historyFrom(ctx);
+    const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? dayStart(String(v)) : null);
+    let from = day(req.query.from);
+    const to = day(req.query.to);
+    if (min && (!from || from < min)) from = min;
+    if (from || to) q.created_date = { ...(from ? { $gte: from } : {}), ...(to ? { $lt: new Date(to.getTime() + DAY) } : {}) };
     const page = int(req.query.page, 1, 1000, 1);
-    const limit = 30;
-    const [rows, total] = await Promise.all([
+    const limit = st === "open" ? 60 : int(req.query.limit, 10, 100, 30);
+    const [rows, total, sum, older] = await Promise.all([
       M.TgOrder.find(q)
         .sort({ created_date: st === "open" ? 1 : -1 })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),
       M.TgOrder.countDocuments(q),
+      M.TgOrder.aggregate([{ $match: { ...q, status: q.status || { $ne: "cancelled" } } }, { $group: { _id: null, total: { $sum: "$total" } } }]),
+      min ? M.TgOrder.countDocuments({ business_id: ctx.business._id, created_date: { $lt: min } }) : 0,
     ]);
-    res.json({ success: true, data: rows.map((o) => orderOut(o)), pagination: { page, limit, total }, counts: await countsOf(ctx) });
+    res.json({
+      success: true,
+      data: rows.map((o) => orderOut(o)),
+      pagination: { page, limit, total },
+      sum: sum[0]?.total || 0,
+      history: { days: HISTORY_DAYS, all: !min, from: min, hidden: older },
+      counts: await countsOf(ctx),
+    });
   });
   door("get", "/orders/:oid", {}, async (ctx, req, res) => {
     const o = await orderOf(ctx, req.params.oid);
@@ -774,20 +832,158 @@ module.exports = (prop) => {
     res.json({ success: true, data: orderOut(after), message: MSG.saved });
   });
 
+  const customerOut = (c) => ({ _id: c._id, name: c.name, phone: c.phone, username: c.username, address: c.address, telegram: !!c.tg_id, can_message: !!c.can_message, orders: c.orders, placed: Math.max(c.placed || 0, c.orders || 0), spent: c.spent, last_order_at: c.last_order_at, note: c.note || "", created_date: c.created_date });
+  const SORTS = { recent: { last_order_at: -1, created_date: -1 }, spent: { spent: -1, orders: -1 }, orders: { orders: -1, spent: -1 }, new: { created_date: -1 }, name: { name: 1 } };
   door("get", "/customers", {}, async (ctx, req, res) => {
-    const q = { business_id: ctx.business._id };
+    const bid = ctx.business._id;
+    const q = { business_id: bid };
     const text = str(req.query.q, 60);
     if (text) {
       const re = new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      q.$or = [{ name: re }, { phone: re }, { username: re }];
+      q.$or = [{ name: re }, { phone: re }, { username: re }, { note: re }];
     }
+    if (req.query.kind === "telegram") q.tg_id = { $gt: "" };
+    if (req.query.kind === "web") q.tg_id = "";
+    if (req.query.kind === "repeat") q.orders = { $gte: 2 };
+    if (req.query.kind === "message") q.can_message = true;
     const page = int(req.query.page, 1, 1000, 1);
-    const rows = await M.TgCustomer.find(q)
-      .sort({ last_order_at: -1, created_date: -1 })
-      .skip((page - 1) * 50)
+    const limit = 30;
+    const monthStart = dayStart(`${localDay().slice(0, 8)}01`);
+    const [rows, total, all, tg, repeat, fresh, spent] = await Promise.all([
+      M.TgCustomer.find(q)
+        .sort(SORTS[req.query.sort] || SORTS.recent)
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      M.TgCustomer.countDocuments(q),
+      M.TgCustomer.countDocuments({ business_id: bid }),
+      M.TgCustomer.countDocuments({ business_id: bid, tg_id: { $gt: "" } }),
+      M.TgCustomer.countDocuments({ business_id: bid, orders: { $gte: 2 } }),
+      M.TgCustomer.countDocuments({ business_id: bid, created_date: { $gte: monthStart } }),
+      M.TgCustomer.aggregate([{ $match: { business_id: bid } }, { $group: { _id: null, total: { $sum: "$spent" } } }]),
+    ]);
+    res.json({ success: true, data: rows.map(customerOut), pagination: { page, limit, total }, stats: { all, telegram: tg, repeat, new_month: fresh, spent: spent[0]?.total || 0 } });
+  });
+  door("get", "/customers/:cid", {}, async (ctx, req, res) => {
+    if (!validId(req.params.cid)) throw new Bad(MSG.badId);
+    const c = await M.TgCustomer.findOne({ _id: req.params.cid, business_id: ctx.business._id }).lean();
+    if (!c) throw new Bad(MSG.rowNotFound, 404);
+    const min = historyFrom(ctx);
+    const orders = await M.TgOrder.find({ business_id: ctx.business._id, customer_id: c._id, ...(min ? { created_date: { $gte: min } } : {}) })
+      .sort({ created_date: -1 })
       .limit(50)
       .lean();
-    res.json({ success: true, data: rows.map((c) => ({ _id: c._id, name: c.name, phone: c.phone, username: c.username, telegram: !!c.tg_id, orders: c.orders, spent: c.spent, last_order_at: c.last_order_at })) });
+    const fav = {};
+    for (const o of orders) if (o.status !== "cancelled") for (const l of o.items) fav[l.name] = (fav[l.name] || 0) + l.qty;
+    res.json({
+      success: true,
+      data: {
+        customer: customerOut(c),
+        orders: orders.map((o) => orderOut(o)),
+        favourites: Object.entries(fav)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([name, qty]) => ({ name, qty })),
+      },
+    });
+  });
+  door("put", "/customers/:cid", { write: true }, async (ctx, req, res) => {
+    if (!validId(req.params.cid)) throw new Bad(MSG.badId);
+    const c = await M.TgCustomer.findOneAndUpdate({ _id: req.params.cid, business_id: ctx.business._id }, { $set: { note: str(req.body?.note, 300) } }, { returnDocument: "after" }).lean();
+    if (!c) throw new Bad(MSG.rowNotFound, 404);
+    res.json({ success: true, data: customerOut(c), message: MSG.saved });
+  });
+
+  // ---------------------------------------- ways to pay (3 free; more + pictures = ts_pay) ----------------------------------------
+  const payCount = (s) => (s.pay.khqr.on ? 1 : 0) + (s.pay.cash.on ? 1 : 0) + s.pay.custom.length;
+  const payOut = (s) => s.pay.custom.map((m) => ({ _id: m._id, name: m.name, info: m.info, image: m.image?.url || "", on: m.on }));
+  door("post", "/pay-methods", { write: true }, async (ctx, req, res) => {
+    const s = ctx.store;
+    if (!ctx.addons.ts_pay.active && (s.pay.custom.length >= 1 || payCount(s) >= FREE_PAY)) throw new Bad(MSG.payLimit, 402, { product: "ts_pay", code: "addon" });
+    if (s.pay.custom.length >= 20) throw new Bad(MSG.tooMany);
+    const name = str(req.body?.name, 40);
+    if (!name) throw new Bad(MSG.needName);
+    s.pay.custom.push({ name, info: str(req.body?.info, 300), on: true });
+    await s.save();
+    res.status(201).json({ success: true, data: payOut(s), message: MSG.saved });
+  });
+  const methodOf = (ctx, mid) => {
+    const m = validId(mid) && ctx.store.pay.custom.id(mid);
+    if (!m) throw new Bad(MSG.rowNotFound, 404);
+    return m;
+  };
+  door("put", "/pay-methods/:mid", { write: true }, async (ctx, req, res) => {
+    const m = methodOf(ctx, req.params.mid);
+    if (req.body?.name !== undefined) {
+      const name = str(req.body.name, 40);
+      if (!name) throw new Bad(MSG.needName);
+      m.name = name;
+    }
+    if (req.body?.info !== undefined) m.info = str(req.body.info, 300);
+    if (req.body?.on !== undefined) m.on = !!req.body.on;
+    await ctx.store.save();
+    res.json({ success: true, data: payOut(ctx.store), message: MSG.saved });
+  });
+  door("delete", "/pay-methods/:mid", { write: true }, async (ctx, req, res) => {
+    const m = methodOf(ctx, req.params.mid);
+    const old = m.image?.public_id;
+    m.deleteOne();
+    await ctx.store.save();
+    if (old) cloud.deleteFile(old).catch(() => {});
+    res.json({ success: true, data: payOut(ctx.store), message: MSG.deleted });
+  });
+  door(
+    "post",
+    "/pay-methods/:mid/image",
+    { write: true },
+    async (ctx, req, res) => {
+      needAddon(ctx, "ts_pay");
+      const m = methodOf(ctx, req.params.mid);
+      if (!req.file) throw new Bad(MSG.noFile);
+      const up = await cloud.uploadBuffer(req.file, "tgstore-pay");
+      const old = m.image?.public_id;
+      m.image = { url: up.url, public_id: up.public_id };
+      await ctx.store.save();
+      if (old) cloud.deleteFile(old).catch(() => {});
+      res.json({ success: true, data: payOut(ctx.store), message: MSG.saved });
+    },
+    [oneImage("image")],
+  );
+  door("delete", "/pay-methods/:mid/image", { write: true }, async (ctx, req, res) => {
+    const m = methodOf(ctx, req.params.mid);
+    const old = m.image?.public_id;
+    m.image = { url: "", public_id: "" };
+    await ctx.store.save();
+    if (old) cloud.deleteFile(old).catch(() => {});
+    res.json({ success: true, data: payOut(ctx.store), message: MSG.saved });
+  });
+
+  // ---------------------------------------- designs: 3 free, the others bought one by one ----------------------------------------
+  door("post", "/themes/:key", { write: true }, async (ctx, req, res) => {
+    const key = String(req.params.key);
+    if (!THEMES.KEYS.includes(key)) throw new Bad(MSG.badTheme);
+    const r = ctx.themes.includes(key) ? null : await buy({ customer: req.customer, business: ctx.business, product: "ts_theme", item: key });
+    ctx.store.theme = key;
+    await ctx.store.save();
+    res.json({ success: true, data: { theme: key, owned: r ? [...ctx.themes, key] : ctx.themes, charged: r?.charged || 0 }, balance: r?.balance, charged: r?.charged || 0, message: MSG.saved });
+  });
+
+  // ---------------------------------------- own link name (ts_link); the old link keeps working ----------------------------------------
+  door("put", "/link", { write: true }, async (ctx, req, res) => {
+    needAddon(ctx, "ts_link");
+    const slug = String(req.body?.slug || "")
+      .trim()
+      .toLowerCase();
+    if (!/^[a-z0-9](?:[a-z0-9-]{1,28})[a-z0-9]$/.test(slug) || slug === "order" || slug.includes("--")) throw new Bad(MSG.badSlug, 400, { code: "bad_slug" });
+    const s = ctx.store;
+    if (slug !== s.slug) {
+      if (await M.TgStore.exists({ _id: { $ne: s._id }, $or: [{ slug }, { old_slugs: slug }] })) throw new Bad(MSG.slugTaken, 409, { code: "taken" });
+      s.old_slugs = [...new Set([s.slug, ...(s.old_slugs || [])])].filter((x) => x !== slug).slice(0, 10);
+      s.slug = slug;
+      await s.save();
+    }
+    const links = await linksOf(s);
+    res.json({ success: true, data: { slug: s.slug, links: { web: links.web, telegram: links.telegram, bot: links.bot } }, message: MSG.saved });
   });
 
   // ---------------------------------------- add-on: promo codes ----------------------------------------
@@ -1015,7 +1211,7 @@ module.exports = (prop) => {
     }
     // a customer opened the shop's bot link: answer with the button that opens the store inside Telegram
     if (/^st_[a-z0-9-]{2,40}$/.test(code)) {
-      const s = await M.TgStore.findOne({ slug: code.slice(3) }).lean();
+      const s = (await M.TgStore.findOne({ slug: code.slice(3) }).lean()) || (await M.TgStore.findOne({ old_slugs: code.slice(3) }).lean());
       if (!s) return "This shop link doesn't work any more.\nតំណហាងនេះមិនដំណើរការទៀតទេ។";
       const url = `${siteOf(s)}/t/${s.slug}`;
       // a web_app button opens the store inside Telegram (signed, so we know who orders); works in a private chat
@@ -1053,7 +1249,7 @@ module.exports = (prop) => {
   // ---------------------------------------- public: the store ----------------------------------------
   async function openStore(slug) {
     const sl = str(slug, 60).toLowerCase();
-    const s = sl ? await M.TgStore.findOne({ slug: sl }) : null;
+    const s = sl ? (await M.TgStore.findOne({ slug: sl })) || (await M.TgStore.findOne({ old_slugs: sl })) : null;
     if (!s) throw new Bad(MSG.storeOff, 404, { code: "not_found" });
     const [business, license] = await Promise.all([Business.findOne({ _id: s.business_id, deleted: false }), licenseState(s.business_id)]);
     const owner = business && (await Customer.findOne({ _id: business.owner_id, deleted: false }).select("status").lean());
@@ -1080,7 +1276,7 @@ module.exports = (prop) => {
       res.json({
         success: true,
         data: {
-          store: { ...lookOut(store), open: now.open, opens: now.next, hours: hoursOut(store, addons), promo: !!addons.ts_promos.active, brand: !addons.ts_nobrand.active },
+          store: { ...lookOut(store), ...(THEMES.KEYS.includes(String(req.query.theme || "")) ? { theme: String(req.query.theme), preview: true } : {}), open: now.open, opens: now.next, hours: hoursOut(store, addons), promo: !!addons.ts_promos.active, brand: !addons.ts_nobrand.active },
           categories: cats.map(categoryOut),
           products: products.map(productOut).map(({ hidden, sort, ...p }) => p), // eslint-disable-line no-unused-vars
           telegram: links.telegram,
@@ -1178,9 +1374,11 @@ module.exports = (prop) => {
       }
       const discount = promo?.off || 0;
       const total = money(Math.max(0, subtotal - discount) + fee, cur);
-      const method = b.pay === "khqr" ? "khqr" : "cash";
+      const own = /^custom:[a-f0-9]{24}$/.test(String(b.pay || "")) ? s.pay.custom.id(String(b.pay).slice(7)) : null;
+      const method = b.pay === "khqr" ? "khqr" : own ? "custom" : "cash";
       if (method === "khqr" && !(s.pay.khqr.on && khqr.isBakongId(s.pay.khqr.bakong_id))) throw new Bad(MSG.badPay, 400, { code: "bad_pay" });
       if (method === "cash" && !s.pay.cash.on) throw new Bad(MSG.badPay, 400, { code: "bad_pay" });
+      if (method === "custom" && !own.on) throw new Bad(MSG.badPay, 400, { code: "bad_pay" });
       const name = str(b.name, 80) || u?.name || "";
       const phone = phoneOf(b.phone);
       if (phone === null) throw new Bad(MSG.needPhone, 400, { code: "bad_phone" });
@@ -1220,11 +1418,11 @@ module.exports = (prop) => {
       if (u) {
         customer = await M.TgCustomer.findOneAndUpdate(
           { business_id: s.business_id, tg_id: u.tg_id },
-          { $set: { ...custSet, username: u.username, ...(u.can_message || b.can_message === true ? { can_message: true } : {}) }, $setOnInsert: { business_id: s.business_id, tg_id: u.tg_id } },
+          { $set: { ...custSet, username: u.username, last_order_at: new Date(), ...(u.can_message || b.can_message === true ? { can_message: true } : {}) }, $inc: { placed: 1 }, $setOnInsert: { business_id: s.business_id, tg_id: u.tg_id } },
           { upsert: true, returnDocument: "after" },
         );
       } else if (phone) {
-        customer = await M.TgCustomer.findOneAndUpdate({ business_id: s.business_id, phone, tg_id: "" }, { $set: custSet, $setOnInsert: { business_id: s.business_id, tg_id: "" } }, { upsert: true, returnDocument: "after" });
+        customer = await M.TgCustomer.findOneAndUpdate({ business_id: s.business_id, phone, tg_id: "" }, { $set: { ...custSet, last_order_at: new Date() }, $inc: { placed: 1 }, $setOnInsert: { business_id: s.business_id, tg_id: "" } }, { upsert: true, returnDocument: "after" });
       }
 
       const seq = await M.TgStore.findOneAndUpdate({ _id: s._id }, { $inc: { seq: 1 } }, { returnDocument: "after" })
@@ -1247,7 +1445,7 @@ module.exports = (prop) => {
         fee,
         total,
         currency: cur,
-        pay: { method, status: "unpaid" },
+        pay: { method, status: "unpaid", ...(own ? { custom: { id: String(own._id), name: own.name, info: own.info, image: addons.ts_pay.active ? own.image?.url || "" : "" } } : {}) },
         timeline: [{ status: "new", at: new Date(), by: name || "Customer" }],
         via: u ? "telegram" : "web",
       });

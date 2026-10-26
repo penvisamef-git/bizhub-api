@@ -193,6 +193,10 @@ const homepageSchema = new mongoose.Schema(
       ts_reports: { type: Number, default: d.prices.ts_reports, min: 0 }, // sales report, yearly
       ts_hours: { type: Number, default: d.prices.ts_hours, min: 0 }, // opening hours, forever
       ts_nobrand: { type: Number, default: d.prices.ts_nobrand, min: 0 }, // no BizHub name, forever
+      ts_history: { type: Number, default: d.prices.ts_history, min: 0 }, // all order history, forever
+      ts_pay: { type: Number, default: d.prices.ts_pay, min: 0 }, // more ways to pay, forever
+      ts_link: { type: Number, default: d.prices.ts_link, min: 0 }, // own link + QR, forever
+      ts_theme: { type: Number, default: d.prices.ts_theme, min: 0 }, // one store design, forever
       fb_book_slot: { type: Number, default: d.prices.fb_book_slot, min: 0 },
       fb_big_slot: { type: Number, default: d.prices.fb_big_slot, min: 0 },
       fb_categories: { type: Number, default: d.prices.fb_categories, min: 0 },
