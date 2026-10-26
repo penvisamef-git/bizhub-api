@@ -98,7 +98,7 @@ const escape = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;
 
 // ---------- incoming messages ----------
 const startHandlers = [];
-const onStart = (fn) => startHandlers.push(fn); // fn(code, chat) → reply text or null
+const onStart = (fn) => startHandlers.push(fn); // fn(code, chat) → reply text, { text, extra } or null
 // a button press (callback_data "<prefix>:…"): fn(data, query) → { toast, alert } or null when not ours
 const callbackHandlers = [];
 const onCallback = (fn) => callbackHandlers.push(fn);
@@ -145,6 +145,8 @@ async function handleUpdate(update) {
     });
     if (reply) break;
   }
+  // a handler may answer with { text, extra } (a message with buttons)
+  if (reply && typeof reply === "object") return send(msg.chat.id, reply.text, reply.extra).catch(() => {});
   await send(msg.chat.id, reply || "👋 Hello from BizHub!\nTo connect, open BizHub → your restaurant → Telegram → Connect.\nដើម្បីភ្ជាប់ សូមបើក BizHub → ភោជនីយដ្ឋាន → តេឡេក្រាម → ភ្ជាប់។").catch(() => {});
 }
 

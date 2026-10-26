@@ -5,6 +5,8 @@
 //   retired    → can't be bought any more (old records stay valid)
 //   soon       → shown, but can't be bought until the feature ships (the POS phase)
 const PRODUCTS = {
+  // Telegram Store (v2.0): a shop that opens inside Telegram (menu / products, cart, KHQR or cash, orders to the shop's group), yearly
+  tg_store: { price_key: "tg_store", days: 365, category: "tg_store", service: "tg_store" },
   // Team access (v1.5): other BizHub accounts open this business as Admin / View only. Any business type, yearly.
   team: { price_key: "team_year", days: 365, category: "*", service: "team" },
   no_branding: { price_key: "remove_branding", days: null, category: "namecard", service: "namecard_branding", retired: true }, // "Made with BizHub" is gone for everyone

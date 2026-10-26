@@ -9,7 +9,7 @@ const PUBLIC_FIELDS = "-_id contact coin prices payment_methods app services gro
 // Service types added after the homepage was saved (e.g. digital_note): show them anyway — a service card
 // after the others, and in the group the defaults put them in (until the super admin saves the page again).
 // Only the types listed here are filled in, so a type the super admin took out of a group stays out.
-const NEW_TYPES = ["digital_note"];
+const NEW_TYPES = ["digital_note", "tg_store"];
 function fillNew(data) {
   const { DEFAULT_HOMEPAGE } = require("./homepage.defaults");
   if (!data) return data;

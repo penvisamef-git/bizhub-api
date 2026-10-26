@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 // Business type = the BizHub service the business runs. We start with these two;
 // add more here (and in the web text) when a new service is ready.
-const BUSINESS_TYPES = ["namecard", "restaurant", "attendance", "guest_house", "mart", "menu_qr", "flipbook", "qr_gen", "website", "debt_book", "stamp_card", "event", "digital_note"];
+const BUSINESS_TYPES = ["namecard", "restaurant", "attendance", "guest_house", "mart", "menu_qr", "flipbook", "qr_gen", "website", "debt_book", "stamp_card", "event", "digital_note", "tg_store"];
 // Old values from before (still readable, not selectable any more)
 const LEGACY_TYPES = ["cafe", "shop", "beauty", "service", "warehouse", "other"];
 

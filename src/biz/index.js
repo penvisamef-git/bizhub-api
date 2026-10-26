@@ -18,6 +18,7 @@ module.exports = (prop) => {
   require("./stamp")(prop); // Loyalty Stamp Card: stamps, rewards, card links, staff desk, Telegram
   require("./event")(prop); // Event Tickets: events, ticket types, KHQR orders, ticket QRs, door phones
   require("./note")(prop); // Digital Note: shared notes (view / add below / edit / collect), files, seen by, history
+  require("./tgstore")(prop); // Telegram Store (v2.0): shop inside Telegram, orders to the shop's group, KHQR / cash
   require("./team/team.route")(prop); // Team access (v1.5): Admin / View only members, invite by BizHub ID or link
   require("./pos_demo")(prop); // "Try demo" in the BizHub POS app: a sample restaurant / mini mart / guest house
 };

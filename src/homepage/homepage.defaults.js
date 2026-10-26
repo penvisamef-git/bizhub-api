@@ -3,7 +3,7 @@
 
 // Services the website knows about (each one has text + icons on the web side)
 // homepage service cards (guest = guest_house, attend = attendance); "warehouse" is old — kept so saved settings stay valid
-const SERVICE_KEYS = ["namecard", "website", "menu_qr", "flipbook", "qr_gen", "restaurant", "mart", "guest", "attend", "debt_book", "stamp_card", "event", "digital_note", "warehouse"];
+const SERVICE_KEYS = ["namecard", "website", "menu_qr", "flipbook", "qr_gen", "restaurant", "mart", "guest", "tg_store", "attend", "debt_book", "stamp_card", "event", "digital_note", "warehouse"];
 const SHOWN_SERVICES = SERVICE_KEYS.filter((k) => k !== "warehouse");
 
 const DEFAULT_HOMEPAGE = {
@@ -160,6 +160,7 @@ const DEFAULT_HOMEPAGE = {
     ev_questions: 30,
     ev_autopay: 60,
     ev_certs: 40,
+    tg_store: 45, // Telegram Store, per year (v2.0)
     fb_book_slot: 1, // v1.5.5: 5 more books = 5 coins (was 5 each)
     fb_big_slot: 10,
     fb_categories: 100,
@@ -227,7 +228,7 @@ const DEFAULT_HOMEPAGE = {
   // service groups on the website + in "Add business" (Super admin → Business groups). Keys are homepage service keys.
   groups: [
     { key: "online", en: "Online & QR", km: "អនឡាញ & QR", types: ["namecard", "website", "menu_qr", "qr_gen", "stamp_card"] },
-    { key: "system", en: "Management systems", km: "ប្រព័ន្ធគ្រប់គ្រង", types: ["restaurant", "mart", "guest", "attend", "event"] },
+    { key: "system", en: "Management systems", km: "ប្រព័ន្ធគ្រប់គ្រង", types: ["restaurant", "mart", "guest", "attend", "event", "tg_store"] },
     { key: "personal", en: "Personal", km: "ផ្ទាល់ខ្លួន", types: ["flipbook", "debt_book", "digital_note"] },
   ],
   texts: { en: {}, km: {} },

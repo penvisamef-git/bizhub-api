@@ -187,6 +187,7 @@ const homepageSchema = new mongoose.Schema(
       ev_questions: { type: Number, default: d.prices.ev_questions, min: 0 },
       ev_autopay: { type: Number, default: d.prices.ev_autopay, min: 0 },
       ev_certs: { type: Number, default: d.prices.ev_certs, min: 0 },
+      tg_store: { type: Number, default: d.prices.tg_store, min: 0 }, // Telegram Store, yearly (v2.0)
       fb_book_slot: { type: Number, default: d.prices.fb_book_slot, min: 0 },
       fb_big_slot: { type: Number, default: d.prices.fb_big_slot, min: 0 },
       fb_categories: { type: Number, default: d.prices.fb_categories, min: 0 },
