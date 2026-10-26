@@ -723,15 +723,22 @@ module.exports = (prop) => {
   // ---------- the owner (customer_auth) ----------
   async function ownerCtx(req, write) {
     if (!validId(req.params.id)) throw new Bad(MSG.badId);
-    const [business, license, addons] = await Promise.all([Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }), licenseState(req.params.id), addonsOf(req.params.id)]);
+    // everything in one go (one wait for the database instead of four)
+    const [business, license, addons, found, themes] = await Promise.all([
+      Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }),
+      licenseState(req.params.id),
+      addonsOf(req.params.id),
+      M.TgStore.findOne({ business_id: req.params.id }),
+      themesOf(req.params.id),
+    ]);
     if (!business) throw new Bad(MSG.notFound, 404);
     if (business.category !== PRODUCT) throw new Bad(MSG.notStore);
     if (write) {
       if (!business.status) throw new Bad(MSG.suspended, 403);
       if (license.read_only) throw new Bad(MSG.locked, 402, { product: PRODUCT });
     }
-    const store = await storeOf(business);
-    return { business, store, license, addons, themes: await themesOf(business._id), who: req.customer.name || "Owner" };
+    const store = found || (await storeOf(business));
+    return { business, store, license, addons, themes, who: req.customer.name || "Owner" };
   }
   const door = (method, path, o, fn, mw = []) =>
     prop.app[method](
@@ -760,13 +767,13 @@ module.exports = (prop) => {
   async function countsOf(ctx) {
     const bid = ctx.business._id;
     const today = dayStart(localDay());
-    const [open, todayRows, products, customers] = await Promise.all([
+    const [open, todayRows, products, customers, fresh] = await Promise.all([
       M.TgOrder.countDocuments({ business_id: bid, status: { $in: ["new", "accepted", "ready", "on_way"] } }),
       M.TgOrder.aggregate([{ $match: { business_id: bid, created_date: { $gte: today }, status: { $ne: "cancelled" } } }, { $group: { _id: null, n: { $sum: 1 }, total: { $sum: "$total" } } }]),
       M.TgProduct.countDocuments({ business_id: bid, deleted: false }),
       M.TgCustomer.countDocuments({ business_id: bid }),
+      M.TgOrder.countDocuments({ business_id: bid, status: "new" }),
     ]);
-    const fresh = await M.TgOrder.countDocuments({ business_id: bid, status: "new" });
     return { open, new: fresh, today_orders: todayRows[0]?.n || 0, today_total: todayRows[0]?.total || 0, products, customers };
   }
 
@@ -777,7 +784,7 @@ module.exports = (prop) => {
       ctx.store.web = origin.slice(0, 200);
       M.TgStore.updateOne({ _id: ctx.store._id }, { $set: { web: ctx.store.web } }).catch(() => {});
     }
-    const [counts, price, links, prices] = await Promise.all([countsOf(ctx), priceOf(PRODUCT), linksOf(ctx.store), Promise.all(ADDONS.map((k) => priceOf(k)))]);
+    const [counts, price, links, prices, themePrice] = await Promise.all([countsOf(ctx), priceOf(PRODUCT), linksOf(ctx.store), Promise.all(ADDONS.map((k) => priceOf(k))), priceOf("ts_theme")]);
     const addons = Object.fromEntries(ADDONS.map((k, i) => [k, { ...ctx.addons[k], price: prices[i], days: PRODUCTS[k].days }]));
     res.json({
       success: true,
@@ -792,7 +799,7 @@ module.exports = (prop) => {
         khqr_auto: khqr.configured(),
         addons,
         open_now: openNow(ctx.store, ctx.license, ctx.addons),
-        themes: { owned: ctx.themes, free: THEMES.FREE, price: await priceOf("ts_theme"), count: THEMES.KEYS.length },
+        themes: { owned: ctx.themes, free: THEMES.FREE, price: themePrice, count: THEMES.KEYS.length },
         history: { days: HISTORY_DAYS, all: !!ctx.addons.ts_history.active },
         pay_free: FREE_PAY,
       },
@@ -1042,7 +1049,7 @@ module.exports = (prop) => {
     if (from || to) q.created_date = { ...(from ? { $gte: from } : {}), ...(to ? { $lt: new Date(to.getTime() + DAY) } : {}) };
     const page = int(req.query.page, 1, 1000, 1);
     const limit = st === "open" ? 60 : int(req.query.limit, 10, 100, 30);
-    const [rows, total, sum, older] = await Promise.all([
+    const [rows, total, sum, older, counts] = await Promise.all([
       M.TgOrder.find(q)
         .sort({ created_date: st === "open" ? 1 : -1 })
         .skip((page - 1) * limit)
@@ -1051,6 +1058,7 @@ module.exports = (prop) => {
       M.TgOrder.countDocuments(q),
       M.TgOrder.aggregate([{ $match: { ...q, status: q.status || { $ne: "cancelled" } } }, { $group: { _id: null, total: { $sum: "$total" } } }]),
       min ? M.TgOrder.countDocuments({ business_id: ctx.business._id, created_date: { $lt: min } }) : 0,
+      countsOf(ctx),
     ]);
     res.json({
       success: true,
@@ -1058,7 +1066,7 @@ module.exports = (prop) => {
       pagination: { page, limit, total },
       sum: sum[0]?.total || 0,
       history: { days: HISTORY_DAYS, all: !min, from: min, hidden: older },
-      counts: await countsOf(ctx),
+      counts,
     });
   });
   door("get", "/orders/:oid", {}, async (ctx, req, res) => {
