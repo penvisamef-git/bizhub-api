@@ -152,8 +152,8 @@ const LINK = {
     const s = await TS.TgStore.findOne({ business_id: business._id });
     if (!s) throw new Off();
     const { token } = await demoDevice(TS.TgPosDevice, "tg_store", business, async () => ({ name: b.name }));
-    const open = await TS.TgOrder.countDocuments({ business_id: business._id, status: { $in: ["new", "accepted", "ready", "on_way"] } });
-    if (open < 2) await demoOrders(s, 3 - open);
+    const waiting = await TS.TgOrder.countDocuments({ business_id: business._id, status: "new" });
+    if (waiting < 2) await demoOrders(s, 3 - waiting);
     return { token, shop: { name: s.shop_name || business.name, logo: s.logo?.url || "", color: s.color || "", theme: s.theme || "" } };
   },
   async stamp_card(business) {

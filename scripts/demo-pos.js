@@ -462,7 +462,7 @@ const ok = (c, m, extra) => {
       r = await call("POST", "/api/public/pos-demo", { kind: "tg_store" });
       ok(r.j.data?.token === tst, "tg_store: the same demo screen again (no new device)");
       r = await call("GET", "/api/tspos/orders", null, tsh);
-      ok(r.j.data.length === 3, "tg_store: no extra orders while 3 are open");
+      ok(r.j.data.length === 3, "tg_store: no extra orders while 3 wait");
 
       // old demo data is tidied, new data stays
       const MM = require("../src/biz/mart/mart.models");
@@ -519,6 +519,22 @@ const ok = (c, m, extra) => {
         for (const p of ["/boot", "/sync", "/today", "/stays", "/cust-requests/count", "/guests?q="]) await rec(null, "GET", `/api/ghpos${p}`, null, gh);
         const stays = out["GET /api/ghpos/stays"].data || [];
         for (const st of stays) await rec(null, "GET", `/api/ghpos/stays/${st._id}`, null, gh);
+        // the telegram store staff screen: one order being made, one ready, one done; a product sold out
+        {
+          const all = (await call("GET", "/api/tspos/orders", null, tsh)).j.data;
+          await call("POST", `/api/tspos/orders/${all[0]._id}/status`, { status: "accepted", eta: 15 }, tsh);
+          await call("POST", `/api/tspos/orders/${all[1]._id}/status`, { status: "accepted" }, tsh);
+          await call("POST", `/api/tspos/orders/${all[1]._id}/status`, { status: all[1].mode === "delivery" ? "on_way" : "ready" }, tsh);
+          await call("POST", `/api/tspos/orders/${all[2]._id}/paid`, {}, tsh);
+          await call("POST", `/api/tspos/orders/${all[2]._id}/status`, { status: "accepted" }, tsh);
+          await call("POST", `/api/tspos/orders/${all[2]._id}/status`, { status: "done" }, tsh);
+          await call("POST", "/api/public/pos-demo", { kind: "tg_store" }); // 2 new orders to accept
+          const pr = (await call("GET", "/api/tspos/products", null, tsh)).j.data;
+          await call("PUT", `/api/tspos/products/${pr.find((x) => x.name === "Chocolate cake")._id}`, { sold_out: true }, tsh);
+          await rec(null, "GET", "/api/tspos/shop", null, { "x-ts-device": tst });
+          await rec(null, "POST", "/api/tspos/login", { pin: PIN }, { "x-ts-device": tst });
+          for (const p of ["/boot", "/orders?view=open", "/orders?view=done", "/products", "/today"]) await rec(null, "GET", `/api/tspos${p}`, null, tsh);
+        }
         out._meta = { day: day(0), made: new Date().toISOString() };
         require("fs").writeFileSync(capArg.split("=")[1], JSON.stringify(out, null, 1));
         console.log(`\nCaptured ${Object.keys(out).length - 1} answers → ${capArg.split("=")[1]}`);
