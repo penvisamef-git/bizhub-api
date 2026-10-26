@@ -209,6 +209,97 @@ const ok = (c, m, extra) => {
   r = await call("POST", P, { mode: "pickup", items: [{ product_id: latte._id, qty: 1, options: [{ group: "Size", choice: "Large" }] }], name: "Bopha", phone: "011222333", note: "<b>hi</b>" }, { auth: false });
   const sent = replies.find((x) => x.method === "sendMessage")?.body;
   ok(sent?.chat_id === "-100555" && /#\d+/.test(sent.text) && sent.text.includes("&lt;b&gt;hi") && sent.reply_markup.inline_keyboard[0][0].callback_data.endsWith(":accept"), "a new order goes to the staff group with Accept (text escaped)", sent);
+
+  console.log("\nadd-ons");
+  await Wallet.updateOne({ _id: w._id }, { $set: { balance: 500 } });
+  const buyAddon = (k) => call("POST", `/api/user/businesses/${bid}/licenses/${k}`, { expect: null });
+  r = await call("GET", B);
+  const ad = r.j.data.addons;
+  ok(ad && ad.ts_promos.price === 25 && ad.ts_promos.days === 365 && !ad.ts_promos.active && ad.ts_hours.days === null && ad.ts_nobrand.price === 20, "overview lists the 5 add-ons with prices", ad);
+  r = await call("POST", `${B}/promos`, { code: "SAVE10", kind: "percent", value: 10 });
+  ok(r.s === 402 && r.j.product === "ts_promos", "promo codes need the add-on", r.j);
+  r = await buyAddon("ts_promos");
+  ok(r.j.success && r.j.charged === 25, "buy Promo codes: 25 coins", r.j);
+  r = await call("POST", `${B}/promos`, { code: " save10 ", kind: "percent", value: 10, min_order: 5 });
+  ok(r.s === 201 && r.j.data.code === "SAVE10", "SAVE10 (10 %, from $5) made, upper case", r.j);
+  r = await call("POST", `${B}/promos`, { code: "SAVE10", kind: "amount", value: 1 });
+  ok(r.s === 409, "the same code twice is refused");
+  r = await call("POST", `${B}/promos`, { code: "x", kind: "amount", value: 1 });
+  ok(r.s === 400 && r.j.code === "bad_code", "a too short code is refused");
+  r = await call("POST", `${B}/promos`, { code: "ONCE2", kind: "amount", value: 2, max_uses: 1 });
+  ok(r.s === 201, "ONCE2 ($2 off, once) made");
+  r = await call("GET", "/api/public/tgstore/sokha-cafe", null, { auth: false });
+  ok(r.j.data.store.promo === true && r.j.data.store.brand === true, "the store shows the promo field (and the BizHub name)");
+  r = await call("POST", "/api/public/tgstore/sokha-cafe/promo", { code: "save10", subtotal: 10 }, { auth: false });
+  ok(r.s === 200 && r.j.data.off === 1, "SAVE10 on $10 → $1 off", r.j);
+  r = await call("POST", "/api/public/tgstore/sokha-cafe/promo", { code: "SAVE10", subtotal: 3 }, { auth: false });
+  ok(r.s === 400 && r.j.code === "promo_min", "SAVE10 under $5 → works from $5", r.j);
+  r = await call("POST", "/api/public/tgstore/sokha-cafe/promo", { code: "NOPE", subtotal: 30 }, { auth: false });
+  ok(r.s === 400 && r.j.code === "bad_promo", "an unknown code doesn't work");
+  replies.length = 0;
+  r = await call("POST", P, { mode: "pickup", items: [{ product_id: latte._id, qty: 3, options: [{ group: "Size", choice: "Large" }] }], name: "Bopha", phone: "011222333", promo: "save10" }, { auth: false });
+  let po = r.s === 201 && (await M.TgOrder.findOne({ token: r.j.data.token }).lean());
+  ok(po && po.discount > 0 && po.promo === "SAVE10" && Math.abs(po.total - (po.subtotal - po.discount)) < 0.001, "an order with SAVE10: discount on the server, total = subtotal − discount", po && { s: po.subtotal, d: po.discount, t: po.total });
+  ok(replies.some((x) => x.body?.text?.includes("🏷 SAVE10")), "the staff group sees the promo code");
+  r = await call("POST", P, { mode: "pickup", items: [{ product_id: latte._id, qty: 1, options: [{ group: "Size", choice: "Large" }] }], name: "Bopha", phone: "011222333", promo: "ONCE2" }, { auth: false });
+  ok(r.s === 201, "ONCE2 works the first time", r.j);
+  r = await call("POST", P, { mode: "pickup", items: [{ product_id: latte._id, qty: 1, options: [{ group: "Size", choice: "Large" }] }], name: "Bopha", phone: "011222333", promo: "ONCE2" }, { auth: false });
+  ok(r.s === 400 && r.j.code === "bad_promo", "ONCE2 can't be used a second time", r.j);
+  r = await call("GET", `${B}/promos`);
+  ok(r.j.data.find((x) => x.code === "ONCE2").used === 1 && r.j.data.find((x) => x.code === "SAVE10").used === 1, "promo list counts the uses");
+  r = await call("GET", `/api/public/tgstore/order/${(await M.TgOrder.findOne({ promo: "SAVE10" })).token}`, null, { auth: false });
+  ok(r.j.data.order.discount > 0 && r.j.data.order.promo === "SAVE10" && r.j.data.store.brand === true, "the customer's order page shows the discount");
+
+  // opening hours
+  const allDays = (d) => Array.from({ length: 7 }, () => d);
+  r = await call("PUT", `${B}/settings`, { hours: { on: true, days: allDays({ open: "07:00", close: "21:00" }) } });
+  ok(r.s === 402 && r.j.product === "ts_hours", "opening hours need the add-on");
+  r = await buyAddon("ts_hours");
+  ok(r.j.success && r.j.data.forever, "buy Opening hours: forever", r.j);
+  r = await call("PUT", `${B}/settings`, { hours: { on: true, days: allDays({ open: "07:00", close: "07:00" }) } });
+  ok(r.s === 400 && r.j.code === "bad_hours", "open = close is refused");
+  r = await call("PUT", `${B}/settings`, { hours: { on: true, days: allDays({ open: "07:00", close: "21:00", closed: true }) } });
+  ok(r.s === 200 && r.j.data.open_now.open === false, "closed every day → closed now");
+  r = await call("GET", "/api/public/tgstore/sokha-cafe", null, { auth: false });
+  ok(r.j.data.store.open === false && r.j.data.store.hours?.days?.length === 7 && r.j.data.store.opens === null, "customers see it closed (no next opening)");
+  r = await call("POST", P, { mode: "pickup", items: [{ product_id: latte._id, qty: 1, options: [{ group: "Size", choice: "Large" }] }], name: "Bopha", phone: "011222333" }, { auth: false });
+  ok(r.s === 409 && r.j.code === "closed", "and can't order");
+  r = await call("PUT", `${B}/settings`, { hours: { on: true, days: allDays({ open: "00:00", close: "23:59" }) } });
+  ok(r.s === 200 && r.j.data.open_now.open === true, "00:00–23:59 every day → open now");
+  r = await call("PUT", `${B}/settings`, { hours: { on: false } });
+  ok(r.s === 200 && r.j.data.store.hours.on === false, "hours off again");
+
+  // sales report
+  r = await call("GET", `${B}/report?days=7`);
+  ok(r.s === 402 && r.j.product === "ts_reports", "the report needs the add-on");
+  r = await buyAddon("ts_reports");
+  ok(r.j.success && r.j.charged === 20, "buy Sales report");
+  r = await call("GET", `${B}/report?days=7`);
+  ok(r.s === 200 && r.j.data.by_day.length === 7 && r.j.data.totals.orders >= 3 && r.j.data.best[0]?.qty > 0 && r.j.data.hours.length === 24 && r.j.data.totals.discount > 0, "report: 7 days, orders, best sellers, hours, discounts", r.j.data?.totals);
+  r = await call("GET", `${B}/report/orders?days=30`);
+  ok(r.s === 200 && r.j.data.length >= 3 && r.j.data.some((x) => x.promo === "SAVE10") && typeof r.j.data[0].items === "string", "report orders for Excel", r.j.data?.[0]);
+
+  // message the customers
+  r = await call("GET", `${B}/broadcasts`);
+  ok(r.s === 200 && r.j.data.reach >= 1 && r.j.data.per_day === 3, "broadcasts: who can be reached", r.j.data);
+  r = await call("POST", `${B}/broadcasts`, { text: "New: mango smoothie!" });
+  ok(r.s === 402 && r.j.product === "ts_broadcast", "sending needs the add-on");
+  await buyAddon("ts_broadcast");
+  replies.length = 0;
+  r = await call("POST", `${B}/broadcasts`, { text: "New: <mango> smoothie!" });
+  const bmsg = replies.find((x) => x.method === "sendMessage" && x.body.text.includes("smoothie"));
+  ok(r.s === 201 && r.j.data.sent >= 1 && bmsg && bmsg.body.text.includes("&lt;mango&gt;") && bmsg.body.reply_markup.inline_keyboard[0][0].web_app, "sent to the Telegram customers, with an Open store button (escaped)", r.j);
+  await call("POST", `${B}/broadcasts`, { text: "2" });
+  await call("POST", `${B}/broadcasts`, { text: "3" });
+  r = await call("POST", `${B}/broadcasts`, { text: "4" });
+  ok(r.s === 429 && r.j.code === "limit", "3 a day at most");
+  r = await call("GET", `${B}/broadcasts`);
+  ok(r.j.data.rows.length === 3 && r.j.data.today === 3, "history of what was sent");
+
+  // no BizHub name
+  r = await buyAddon("ts_nobrand");
+  r = await call("GET", "/api/public/tgstore/sokha-cafe", null, { auth: false });
+  ok(r.j.data.store.brand === false, "No BizHub name: the store hides it");
   globalThis.fetch = fetch0;
 
   console.log("\nlocked");

@@ -188,6 +188,11 @@ const homepageSchema = new mongoose.Schema(
       ev_autopay: { type: Number, default: d.prices.ev_autopay, min: 0 },
       ev_certs: { type: Number, default: d.prices.ev_certs, min: 0 },
       tg_store: { type: Number, default: d.prices.tg_store, min: 0 }, // Telegram Store, yearly (v2.0)
+      ts_promos: { type: Number, default: d.prices.ts_promos, min: 0 }, // promo codes, yearly
+      ts_broadcast: { type: Number, default: d.prices.ts_broadcast, min: 0 }, // message customers, yearly
+      ts_reports: { type: Number, default: d.prices.ts_reports, min: 0 }, // sales report, yearly
+      ts_hours: { type: Number, default: d.prices.ts_hours, min: 0 }, // opening hours, forever
+      ts_nobrand: { type: Number, default: d.prices.ts_nobrand, min: 0 }, // no BizHub name, forever
       fb_book_slot: { type: Number, default: d.prices.fb_book_slot, min: 0 },
       fb_big_slot: { type: Number, default: d.prices.fb_big_slot, min: 0 },
       fb_categories: { type: Number, default: d.prices.fb_categories, min: 0 },

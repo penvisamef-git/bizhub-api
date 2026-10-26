@@ -161,6 +161,11 @@ const DEFAULT_HOMEPAGE = {
     ev_autopay: 60,
     ev_certs: 40,
     tg_store: 45, // Telegram Store, per year (v2.0)
+    ts_promos: 25, // promo codes, per year
+    ts_broadcast: 30, // message your customers, per year
+    ts_reports: 20, // sales report + Excel, per year
+    ts_hours: 10, // opening hours, forever
+    ts_nobrand: 20, // no BizHub name, forever
     fb_book_slot: 1, // v1.5.5: 5 more books = 5 coins (was 5 each)
     fb_big_slot: 10,
     fb_categories: 100,

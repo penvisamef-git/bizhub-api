@@ -31,6 +31,7 @@ const { bizOwner } = require("../team/team.access"); // team members (Admin / Vi
 const Customer = require("../../user/customer.model");
 const License = require("../../license/license.model");
 const { statusOf, DAY } = require("../../license/license.service");
+const { PRODUCTS } = require("../../license/license.products");
 const { priceOf } = require("../../homepage/prices");
 const { customer_auth } = require("../../user/customer_auth");
 const { rate_limit } = require("../../util/rate_limit");
@@ -42,7 +43,9 @@ const PRODUCT = "tg_store";
 const GRACE_DAYS = 7;
 const TZ = 7;
 const DEFAULT_SITE = "https://bizhub-cambodia.web.app";
-const LIMITS = { products: 500, categories: 40, items: 40, qty: 99, options: 6, choices: 12 };
+const LIMITS = { products: 500, categories: 40, items: 40, qty: 99, options: 6, choices: 12, promos: 50, broadcastsPerDay: 3, broadcastReach: 500 };
+// add-ons, paid with coins (license products); yearly ones end, the others are forever
+const ADDONS = ["ts_promos", "ts_broadcast", "ts_reports", "ts_hours", "ts_nobrand"];
 const MSG = {
   server: "ម៉ាសុីនមេមានបញ្ហា សូមព្យាយាមម្តងទៀតពេលក្រោយ! / Server problem, please try again later.",
   badId: "មិនមាន ID ត្រឹមត្រូវ! / Wrong ID.",
@@ -80,6 +83,16 @@ const MSG = {
   tgSent: "បានផ្ញើសារសាកល្បង! / Test message sent.",
   slow: "សូមរង់ចាំបន្តិច រួចព្យាយាមម្តងទៀត។ / Please wait a moment and try again.",
   orderGone: "រកមិនឃើញការកម្ម៉ង់! / Order not found.",
+  needAddon: "សូមបើកមុខងារបន្ថែមនេះជាមុនសិន។ / Unlock this add-on first.",
+  badPromo: "កូដបញ្ចុះតម្លៃមិនត្រឹមត្រូវ ឬផុតកំណត់! / This promo code doesn't work.",
+  promoMin: "កូដនេះប្រើបានចាប់ពី {amount}! / This code works from {amount}.",
+  promoTaken: "កូដនេះមានរួចហើយ! / You already have this code.",
+  badCode: "កូដ៖ អក្សរ A–Z និងលេខ 3–20 ខ្ទង់! / Code: 3–20 letters A–Z and numbers.",
+  badHours: "ម៉ោងមិនត្រឹមត្រូវ (ឧ. 07:00)! / Wrong time (like 07:00).",
+  needText: "សូមសរសេរសារ! / Please write the message.",
+  broadcastLimit: "អ្នកផ្ញើបាន {n} ដងក្នុងមួយថ្ងៃ។ សូមព្យាយាមថ្ងៃស្អែក។ / You can send {n} times a day. Try again tomorrow.",
+  noReach: "មិនទាន់មានអតិថិជនដែលអនុញ្ញាតឲ្យផ្ញើសារទេ។ / No customers allowed messages yet.",
+  broadcastSent: "បានផ្ញើទៅ {n} នាក់! / Sent to {n} people.",
 };
 class Bad extends Error {
   constructor(message, status = 400, extra = {}) {
@@ -167,6 +180,67 @@ async function licenseState(businessId) {
   license.read_only = !license.active; // after the year: look only; the store stays open to customers for the grace days
   return license;
 }
+async function addonsOf(businessId) {
+  const rows = await License.find({ business_id: businessId, product: { $in: ADDONS }, item: { $in: ["", null] } }).lean();
+  const out = {};
+  for (const key of ADDONS) out[key] = statusOf(rows.find((r) => r.product === key));
+  return out;
+}
+const needAddon = (ctx, key) => {
+  if (!ctx.addons?.[key]?.active) throw new Bad(MSG.needAddon, 402, { product: key, code: "addon" });
+};
+
+// ---------- opening hours (add-on ts_hours), Cambodia time ----------
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+const minOf = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+function hoursNow(hours, at = new Date()) {
+  const local = new Date(at.getTime() + TZ * 3600000);
+  const day = local.getUTCDay();
+  const now = local.getUTCHours() * 60 + local.getUTCMinutes();
+  const days = hours?.days?.length === 7 ? hours.days : [];
+  const inDay = (d, m) => {
+    if (!d || d.closed) return false;
+    const o = minOf(d.open);
+    const c = minOf(d.close);
+    return c > o ? m >= o && m < c : m >= o; // closes past midnight: the part before midnight
+  };
+  const lateFromYesterday = (m) => {
+    const y = days[(day + 6) % 7];
+    return !!y && !y.closed && minOf(y.close) <= minOf(y.open) && m < minOf(y.close);
+  };
+  const open = inDay(days[day], now) || lateFromYesterday(now);
+  let next = null; // when it opens next
+  if (!open)
+    for (let i = 0; i < 8 && !next; i += 1) {
+      const d = days[(day + i) % 7];
+      if (d && !d.closed && (i > 0 || minOf(d.open) > now)) next = { in_days: i, day: (day + i) % 7, time: d.open };
+    }
+  return { open, next };
+}
+// open for orders right now: the switch, the year, and the hours (when the add-on is on)
+function openNow(s, license, addons) {
+  if (!s.open || license.read_only) return { open: false, next: null };
+  if (!(addons?.ts_hours?.active && s.hours?.on)) return { open: true, next: null };
+  return hoursNow(s.hours);
+}
+const hoursOut = (s, addons) => (addons?.ts_hours?.active && s.hours?.on ? { days: (s.hours.days || []).map((d) => ({ open: d.open, close: d.close, closed: !!d.closed })) } : null);
+
+// ---------- promo codes (add-on ts_promos) ----------
+const codeOf = (v) =>
+  String(v || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+const promoOut = (p) => ({ _id: p._id, code: p.code, kind: p.kind, value: p.value, min_order: p.min_order, ends_at: p.ends_at, max_uses: p.max_uses, used: p.used, on: p.on });
+// how much a code takes off this subtotal (throws when it can't be used)
+async function promoFor(s, code, subtotal) {
+  const p = await M.TgPromo.findOne({ business_id: s.business_id, code: codeOf(code), deleted: false }).lean();
+  if (!p || !p.on || (p.ends_at && new Date(p.ends_at) < new Date()) || (p.max_uses && p.used >= p.max_uses)) throw new Bad(MSG.badPromo, 400, { code: "bad_promo" });
+  if (p.min_order && subtotal < p.min_order) throw new Bad(fill(MSG.promoMin, { amount: fmtMoney(p.min_order, s.currency) }), 400, { code: "promo_min" });
+  const off = p.kind === "percent" ? money((subtotal * Math.min(100, p.value)) / 100, s.currency) : money(Math.min(p.value, subtotal), s.currency);
+  return { promo: p, off: Math.min(off, subtotal) };
+}
+
 async function freeSlug(name) {
   const base = slugBase(name) || "shop";
   for (let i = 0; i < 20; i += 1) {
@@ -219,6 +293,8 @@ const orderOut = (o, full = false) => ({
   customer: o.customer,
   items: o.items,
   subtotal: o.subtotal,
+  discount: o.discount || 0,
+  promo: o.promo || "",
   fee: o.fee,
   total: o.total,
   currency: o.currency,
@@ -266,6 +342,7 @@ function groupText(s, o) {
     "",
     ...o.items.map((l) => `${l.qty} × ${esc(l.name)}${l.options?.length ? ` (${esc(l.options.map((x) => x.choice).join(", "))})` : ""}${l.note ? ` — <i>${esc(l.note)}</i>` : ""}  ${fmtMoney(l.total, cur)}`),
   ];
+  if (o.discount) lines.push(`🏷 ${esc(o.promo)} −${fmtMoney(o.discount, cur)}`);
   if (o.fee) lines.push(`Delivery · ដឹក ${fmtMoney(o.fee, cur)}`);
   lines.push(`<b>Total · សរុប ${fmtMoney(o.total, cur)}</b> · ${o.pay.method === "khqr" ? "KHQR" : "Cash · សាច់ប្រាក់"} · ${PAY[o.pay.status]}`, "");
   const who = [o.customer?.name && `<b>${esc(o.customer.name)}</b>`, o.customer?.phone && esc(o.customer.phone), o.customer?.username && `@${esc(o.customer.username)}`].filter(Boolean).join(" · ");
@@ -421,7 +498,7 @@ module.exports = (prop) => {
   // ---------- the owner (customer_auth) ----------
   async function ownerCtx(req, write) {
     if (!validId(req.params.id)) throw new Bad(MSG.badId);
-    const [business, license] = await Promise.all([Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }), licenseState(req.params.id)]);
+    const [business, license, addons] = await Promise.all([Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }), licenseState(req.params.id), addonsOf(req.params.id)]);
     if (!business) throw new Bad(MSG.notFound, 404);
     if (business.category !== PRODUCT) throw new Bad(MSG.notStore);
     if (write) {
@@ -429,7 +506,7 @@ module.exports = (prop) => {
       if (license.read_only) throw new Bad(MSG.locked, 402, { product: PRODUCT });
     }
     const store = await storeOf(business);
-    return { business, store, license, who: req.customer.name || "Owner" };
+    return { business, store, license, addons, who: req.customer.name || "Owner" };
   }
   const door = (method, path, o, fn, mw = []) =>
     prop.app[method](
@@ -475,7 +552,8 @@ module.exports = (prop) => {
       ctx.store.web = origin.slice(0, 200);
       M.TgStore.updateOne({ _id: ctx.store._id }, { $set: { web: ctx.store.web } }).catch(() => {});
     }
-    const [counts, price, links] = await Promise.all([countsOf(ctx), priceOf(PRODUCT), linksOf(ctx.store)]);
+    const [counts, price, links, prices] = await Promise.all([countsOf(ctx), priceOf(PRODUCT), linksOf(ctx.store), Promise.all(ADDONS.map((k) => priceOf(k)))]);
+    const addons = Object.fromEntries(ADDONS.map((k, i) => [k, { ...ctx.addons[k], price: prices[i], days: PRODUCTS[k].days }]));
     res.json({
       success: true,
       data: {
@@ -486,6 +564,8 @@ module.exports = (prop) => {
         links: { web: links.web, telegram: links.telegram, bot: links.bot },
         telegram: { configured: telegram.ready(), connected: !!ctx.store.tg?.chat_id, chat_name: ctx.store.tg?.chat_name || "" },
         khqr_auto: khqr.configured(),
+        addons,
+        open_now: openNow(ctx.store, ctx.license, ctx.addons),
       },
     });
   });
@@ -529,10 +609,21 @@ module.exports = (prop) => {
       }
     }
     if (b.pay?.cash?.on !== undefined) s.pay.cash.on = !!b.pay.cash.on;
+    if (b.hours) {
+      if (b.hours.on && !ctx.addons.ts_hours.active) needAddon(ctx, "ts_hours");
+      if (Array.isArray(b.hours.days)) {
+        if (b.hours.days.length !== 7) throw new Bad(MSG.badHours);
+        s.hours.days = b.hours.days.map((d) => {
+          if (!d?.closed && (!HHMM.test(String(d?.open)) || !HHMM.test(String(d?.close)) || d.open === d.close)) throw new Bad(MSG.badHours, 400, { code: "bad_hours" });
+          return { open: HHMM.test(String(d?.open)) ? d.open : "07:00", close: HHMM.test(String(d?.close)) ? d.close : "21:00", closed: !!d?.closed };
+        });
+      }
+      if (b.hours.on !== undefined) s.hours.on = !!b.hours.on;
+    }
     if (!s.delivery.on && !s.pickup.on && !s.dine_in.on) throw new Bad(MSG.badMode, 400, { code: "need_mode" });
     if (!s.pay.cash.on && !s.pay.khqr.on) throw new Bad(MSG.badPay, 400, { code: "need_pay" });
     await s.save();
-    res.json({ success: true, data: { store: storeOut(s) }, message: MSG.saved });
+    res.json({ success: true, data: { store: storeOut(s), open_now: openNow(s, ctx.license, ctx.addons) }, message: MSG.saved });
   });
 
   door(
@@ -699,6 +790,190 @@ module.exports = (prop) => {
     res.json({ success: true, data: rows.map((c) => ({ _id: c._id, name: c.name, phone: c.phone, username: c.username, telegram: !!c.tg_id, orders: c.orders, spent: c.spent, last_order_at: c.last_order_at })) });
   });
 
+  // ---------------------------------------- add-on: promo codes ----------------------------------------
+  door("get", "/promos", {}, async (ctx, req, res) => {
+    const rows = await M.TgPromo.find({ business_id: ctx.business._id, deleted: false }).sort({ created_date: -1 }).lean();
+    res.json({ success: true, data: rows.map(promoOut) });
+  });
+  const readPromo = (b, cur, isNew) => {
+    const set = {};
+    if (isNew || b.code !== undefined) {
+      const code = codeOf(b.code);
+      if (!/^[A-Z0-9]{3,20}$/.test(code)) throw new Bad(MSG.badCode, 400, { code: "bad_code" });
+      set.code = code;
+    }
+    if (isNew || b.kind !== undefined) set.kind = b.kind === "amount" ? "amount" : "percent";
+    if (isNew || b.value !== undefined) {
+      const kind = set.kind || b.kind;
+      const v = Number(b.value);
+      if (!(v > 0) || (kind === "percent" && v > 100)) throw new Bad(MSG.badValue, 400, { code: "bad_value" });
+      set.value = kind === "percent" ? Math.round(v) : money(v, cur);
+    }
+    if (b.min_order !== undefined) set.min_order = money(b.min_order || 0, cur) ?? 0;
+    if (b.max_uses !== undefined) set.max_uses = int(b.max_uses, 0, 1000000, 0);
+    if (b.ends_at !== undefined) set.ends_at = b.ends_at && !Number.isNaN(Date.parse(b.ends_at)) ? new Date(b.ends_at) : null;
+    if (b.on !== undefined) set.on = !!b.on;
+    return set;
+  };
+  door("post", "/promos", { write: true }, async (ctx, req, res) => {
+    needAddon(ctx, "ts_promos");
+    if ((await M.TgPromo.countDocuments({ business_id: ctx.business._id, deleted: false })) >= LIMITS.promos) throw new Bad(MSG.tooMany);
+    const set = readPromo(req.body || {}, ctx.store.currency, true);
+    if (await M.TgPromo.exists({ business_id: ctx.business._id, code: set.code, deleted: false })) throw new Bad(MSG.promoTaken, 409, { code: "taken" });
+    const p = await M.TgPromo.create({ business_id: ctx.business._id, ...set });
+    res.status(201).json({ success: true, data: promoOut(p), message: MSG.saved });
+  });
+  door("put", "/promos/:pid", { write: true }, async (ctx, req, res) => {
+    needAddon(ctx, "ts_promos");
+    if (!validId(req.params.pid)) throw new Bad(MSG.badId);
+    const p = await M.TgPromo.findOne({ _id: req.params.pid, business_id: ctx.business._id, deleted: false });
+    if (!p) throw new Bad(MSG.rowNotFound, 404);
+    const set = readPromo({ kind: p.kind, ...req.body }, ctx.store.currency, false);
+    if (set.code && set.code !== p.code && (await M.TgPromo.exists({ business_id: ctx.business._id, code: set.code, deleted: false }))) throw new Bad(MSG.promoTaken, 409, { code: "taken" });
+    Object.assign(p, set);
+    await p.save();
+    res.json({ success: true, data: promoOut(p), message: MSG.saved });
+  });
+  door("delete", "/promos/:pid", { write: true }, async (ctx, req, res) => {
+    if (!validId(req.params.pid)) throw new Bad(MSG.badId);
+    await M.TgPromo.updateOne({ _id: req.params.pid, business_id: ctx.business._id }, { $set: { deleted: true, on: false } });
+    res.json({ success: true, message: MSG.deleted });
+  });
+
+  // ---------------------------------------- add-on: message the customers ----------------------------------------
+  const reachOf = (bid) => ({ business_id: bid, tg_id: { $gt: "" }, can_message: true });
+  door("get", "/broadcasts", {}, async (ctx, req, res) => {
+    const today = dayStart(localDay());
+    const [rows, reach, sentToday] = await Promise.all([
+      M.TgBroadcast.find({ business_id: ctx.business._id }).sort({ created_date: -1 }).limit(20).lean(),
+      M.TgCustomer.countDocuments(reachOf(ctx.business._id)),
+      M.TgBroadcast.countDocuments({ business_id: ctx.business._id, created_date: { $gte: today } }),
+    ]);
+    const out = rows.map((r) => ({ _id: r._id, text: r.text, total: r.total, sent: r.sent, failed: r.failed, by: r.by, created_date: r.created_date }));
+    res.json({ success: true, data: { rows: out, reach: Math.min(reach, LIMITS.broadcastReach), reach_all: reach, today: sentToday, per_day: LIMITS.broadcastsPerDay, telegram: telegram.ready() } });
+  });
+  door("post", "/broadcasts", { write: true }, async (ctx, req, res) => {
+    needAddon(ctx, "ts_broadcast");
+    if (!telegram.ready()) throw new Bad(MSG.tgNotConfigured, 503);
+    const text = str(req.body?.text, 1000);
+    if (!text) throw new Bad(MSG.needText);
+    const today = dayStart(localDay());
+    if ((await M.TgBroadcast.countDocuments({ business_id: ctx.business._id, created_date: { $gte: today } })) >= LIMITS.broadcastsPerDay) throw new Bad(fill(MSG.broadcastLimit, { n: LIMITS.broadcastsPerDay }), 429, { code: "limit" });
+    const people = await M.TgCustomer.find(reachOf(ctx.business._id)).sort({ last_order_at: -1, created_date: -1 }).limit(LIMITS.broadcastReach).select("tg_id").lean();
+    if (!people.length) throw new Bad(MSG.noReach, 400, { code: "no_reach" });
+    const s = ctx.store;
+    const button = telegram.keyboard([[{ text: `🛍 ${s.shop_name}`.slice(0, 60), web_app: { url: `${siteOf(s)}/t/${s.slug}` } }]]);
+    const body = `<b>${esc(s.shop_name)}</b>\n${esc(text)}`;
+    let sent = 0;
+    let failed = 0;
+    const blocked = [];
+    for (let i = 0; i < people.length; i += 15) {
+      await Promise.all(
+        people.slice(i, i + 15).map((c) =>
+          telegram
+            .send(c.tg_id, body, button)
+            .then(() => (sent += 1))
+            .catch((err) => {
+              failed += 1;
+              if (err instanceof telegram.TelegramError && err.message === "blocked") blocked.push(c._id);
+            }),
+        ),
+      );
+    }
+    if (blocked.length) await M.TgCustomer.updateMany({ _id: { $in: blocked } }, { $set: { can_message: false } });
+    const row = await M.TgBroadcast.create({ business_id: ctx.business._id, text, total: people.length, sent, failed, by: ctx.who });
+    res.status(201).json({ success: true, data: { _id: row._id, text, total: people.length, sent, failed, by: ctx.who, created_date: row.created_date }, message: fill(MSG.broadcastSent, { n: sent }) });
+  });
+
+  // ---------------------------------------- add-on: sales report ----------------------------------------
+  const rangeOf = (q) => {
+    const days = [7, 30, 90].includes(Number(q.days)) ? Number(q.days) : 30;
+    const from = dayStart(localDay(new Date(Date.now() - (days - 1) * DAY)));
+    return { days, from };
+  };
+  door("get", "/report", {}, async (ctx, req, res) => {
+    needAddon(ctx, "ts_reports");
+    const { days, from } = rangeOf(req.query);
+    const rows = await M.TgOrder.find({ business_id: ctx.business._id, created_date: { $gte: from } })
+      .select("created_date status total discount items mode pay.method")
+      .limit(20000)
+      .lean();
+    const ok = rows.filter((o) => o.status !== "cancelled");
+    const byDay = {};
+    for (let i = 0; i < days; i += 1) byDay[localDay(new Date(from.getTime() + i * DAY + 12 * 3600000))] = { orders: 0, sales: 0 };
+    const best = {};
+    const hours = Array(24).fill(0);
+    const modes = { delivery: 0, pickup: 0, dine_in: 0 };
+    const pay = { khqr: 0, cash: 0 };
+    let sales = 0;
+    let discount = 0;
+    for (const o of ok) {
+      const d = localDay(o.created_date);
+      if (byDay[d]) {
+        byDay[d].orders += 1;
+        byDay[d].sales += o.total;
+      }
+      sales += o.total;
+      discount += o.discount || 0;
+      hours[new Date(new Date(o.created_date).getTime() + TZ * 3600000).getUTCHours()] += 1;
+      modes[o.mode] = (modes[o.mode] || 0) + 1;
+      pay[o.pay?.method] = (pay[o.pay?.method] || 0) + 1;
+      for (const l of o.items || []) {
+        best[l.name] = best[l.name] || { name: l.name, qty: 0, sales: 0 };
+        best[l.name].qty += l.qty;
+        best[l.name].sales += l.total;
+      }
+    }
+    const cur = ctx.store.currency;
+    const r2 = (v) => money(v, cur) ?? 0;
+    res.json({
+      success: true,
+      data: {
+        days,
+        currency: cur,
+        totals: { orders: ok.length, sales: r2(sales), avg: ok.length ? r2(sales / ok.length) : 0, cancelled: rows.length - ok.length, discount: r2(discount) },
+        by_day: Object.entries(byDay).map(([day, v]) => ({ day, orders: v.orders, sales: r2(v.sales) })),
+        best: Object.values(best)
+          .sort((a, b) => b.qty - a.qty)
+          .slice(0, 10)
+          .map((b) => ({ ...b, sales: r2(b.sales) })),
+        hours,
+        modes,
+        pay,
+      },
+    });
+  });
+  // every order of the period, for the Excel file the page makes
+  door("get", "/report/orders", {}, async (ctx, req, res) => {
+    needAddon(ctx, "ts_reports");
+    const { from } = rangeOf(req.query);
+    const rows = await M.TgOrder.find({ business_id: ctx.business._id, created_date: { $gte: from } })
+      .sort({ created_date: 1 })
+      .limit(20000)
+      .lean();
+    const line = (l) => `${l.qty} × ${l.name}${l.options?.length ? ` (${l.options.map((x) => x.choice).join(", ")})` : ""}`;
+    res.json({
+      success: true,
+      data: rows.map((o) => ({
+        no: o.no,
+        date: o.created_date,
+        status: o.status,
+        mode: o.mode,
+        table: o.table,
+        customer: o.customer?.name || "",
+        phone: o.customer?.phone || "",
+        items: o.items.map(line).join("; "),
+        subtotal: o.subtotal,
+        discount: o.discount || 0,
+        promo: o.promo || "",
+        fee: o.fee,
+        total: o.total,
+        pay: o.pay?.method,
+        paid: o.pay?.status === "paid",
+      })),
+    });
+  });
+
   // ---------------------------------------- Telegram: the staff group ----------------------------------------
   door("post", "/telegram/link", { write: true }, async (ctx, req, res) => {
     if (!telegram.ready()) throw new Bad(MSG.tgNotConfigured, 503);
@@ -783,7 +1058,7 @@ module.exports = (prop) => {
     const [business, license] = await Promise.all([Business.findOne({ _id: s.business_id, deleted: false }), licenseState(s.business_id)]);
     const owner = business && (await Customer.findOne({ _id: business.owner_id, deleted: false }).select("status").lean());
     if (!business?.status || !owner?.status || license.locked) throw new Bad(MSG.storeOff, 404, { code: "off" });
-    return { store: s, business, license };
+    return { store: s, business, license, addons: await addonsOf(s.business_id) };
   }
   const pub = (path) => `/api/public/tgstore${path}`;
   const orderLimiter = rate_limit({ windowMs: 10 * 60 * 1000, max: 20, message: MSG.slow });
@@ -794,7 +1069,8 @@ module.exports = (prop) => {
     pub("/:slug"),
     handle(async (req, res) => {
       if (req.params.slug === "order") throw new Bad(MSG.storeOff, 404);
-      const { store, license } = await openStore(req.params.slug);
+      const { store, license, addons } = await openStore(req.params.slug);
+      const now = openNow(store, license, addons);
       const [cats, products, links] = await Promise.all([
         M.TgCategory.find({ business_id: store.business_id, deleted: false }).sort({ sort: 1, created_date: 1 }).lean(),
         M.TgProduct.find({ business_id: store.business_id, deleted: false, hidden: false }).sort({ sort: 1, created_date: 1 }).lean(),
@@ -804,7 +1080,7 @@ module.exports = (prop) => {
       res.json({
         success: true,
         data: {
-          store: { ...lookOut(store), open: store.open && !license.read_only },
+          store: { ...lookOut(store), open: now.open, opens: now.next, hours: hoursOut(store, addons), promo: !!addons.ts_promos.active, brand: !addons.ts_nobrand.active },
           categories: cats.map(categoryOut),
           products: products.map(productOut).map(({ hidden, sort, ...p }) => p), // eslint-disable-line no-unused-vars
           telegram: links.telegram,
@@ -839,13 +1115,26 @@ module.exports = (prop) => {
     }),
   );
 
+  // check a promo code in the cart (the order works it out again)
+  prop.app.post(
+    pub("/:slug/promo"),
+    orderLimiter,
+    handle(async (req, res) => {
+      const { store: s, addons } = await openStore(req.params.slug);
+      if (!addons.ts_promos.active) throw new Bad(MSG.badPromo, 400, { code: "bad_promo" });
+      const subtotal = money(req.body?.subtotal || 0, s.currency) ?? 0;
+      const { promo, off } = await promoFor(s, req.body?.code, subtotal);
+      res.json({ success: true, data: { code: promo.code, kind: promo.kind, value: promo.value, min_order: promo.min_order, off } });
+    }),
+  );
+
   // place an order: prices, choices and stock are worked out here, never trusted from the phone
   prop.app.post(
     pub("/:slug/orders"),
     orderLimiter,
     handle(async (req, res) => {
-      const { store: s, license } = await openStore(req.params.slug);
-      if (!s.open || license.read_only) throw new Bad(MSG.closed, 409, { code: "closed" });
+      const { store: s, license, addons } = await openStore(req.params.slug);
+      if (!openNow(s, license, addons).open) throw new Bad(MSG.closed, 409, { code: "closed" });
       const b = req.body || {};
       const u = who(req);
       const cur = s.currency;
@@ -881,7 +1170,14 @@ module.exports = (prop) => {
         if (s.delivery.min_order && subtotal < s.delivery.min_order) throw new Bad(fill(MSG.minOrder, { amount: fmtMoney(s.delivery.min_order, cur) }), 400, { code: "min_order" });
         fee = s.delivery.free_from && subtotal >= s.delivery.free_from ? 0 : money(s.delivery.fee || 0, cur);
       }
-      const total = money(subtotal + fee, cur);
+      // a promo code (add-on ts_promos): worked out here from the real subtotal
+      let promo = null;
+      if (b.promo && String(b.promo).trim()) {
+        if (!addons.ts_promos.active) throw new Bad(MSG.badPromo, 400, { code: "bad_promo" });
+        promo = await promoFor(s, b.promo, subtotal);
+      }
+      const discount = promo?.off || 0;
+      const total = money(Math.max(0, subtotal - discount) + fee, cur);
       const method = b.pay === "khqr" ? "khqr" : "cash";
       if (method === "khqr" && !(s.pay.khqr.on && khqr.isBakongId(s.pay.khqr.bakong_id))) throw new Bad(MSG.badPay, 400, { code: "bad_pay" });
       if (method === "cash" && !s.pay.cash.on) throw new Bad(MSG.badPay, 400, { code: "bad_pay" });
@@ -907,6 +1203,15 @@ module.exports = (prop) => {
           throw new Bad(now?.stock ? fill(MSG.notEnough, { name: p.name, n: now.stock }) : fill(MSG.soldOut, { name: p.name }), 409, { code: "stock", product_id: p._id, left: now?.stock || 0 });
         }
         taken.push([pid, qty]);
+      }
+
+      // use the code once (all or nothing, like the stock)
+      if (promo) {
+        const used = await M.TgPromo.updateOne({ _id: promo.promo._id, on: true, ...(promo.promo.max_uses ? { used: { $lt: promo.promo.max_uses } } : {}) }, { $inc: { used: 1 } });
+        if (!used.modifiedCount) {
+          for (const [tid, tq] of taken) await M.TgProduct.updateOne({ _id: tid }, { $inc: { stock: tq } });
+          throw new Bad(MSG.badPromo, 400, { code: "bad_promo" });
+        }
       }
 
       // who is ordering
@@ -937,6 +1242,8 @@ module.exports = (prop) => {
         customer: { tg_id: u?.tg_id || "", username: u?.username || "", name, phone: phone || "" },
         items,
         subtotal,
+        discount,
+        promo: promo ? promo.promo.code : "",
         fee,
         total,
         currency: cur,
@@ -953,6 +1260,7 @@ module.exports = (prop) => {
         await o.save();
       } catch (err) {
         for (const [tid, tq] of taken) await M.TgProduct.updateOne({ _id: tid }, { $inc: { stock: tq } });
+        if (promo) await M.TgPromo.updateOne({ _id: promo.promo._id }, { $inc: { used: -1 } });
         throw err;
       }
       await postToGroup(s, o);
@@ -982,7 +1290,8 @@ module.exports = (prop) => {
       }
       res.set("Cache-Control", "no-store");
       const kq = o.pay.method === "khqr" && o.pay.status !== "paid" ? { qr: o.pay.khqr?.qr || "", amount: o.pay.khqr?.amount || o.total, expires: o.pay.khqr?.expires || null, name: s.pay.khqr.account_name || s.shop_name, auto: khqr.configured() } : null;
-      res.json({ success: true, data: { order: orderOut(o), khqr: kq, store: lookOut(s) } });
+      const brand = !(await addonsOf(o.business_id)).ts_nobrand.active;
+      res.json({ success: true, data: { order: orderOut(o), khqr: kq, store: { ...lookOut(s), brand } } });
     }),
   );
   prop.app.post(

@@ -41,6 +41,14 @@ const storeSchema = new Schema(
       link_code: { type: String, default: "" },
       link_expires: { type: Date, default: null },
     },
+    // opening hours (add-on ts_hours): 7 days, Sunday first; "close" before "open" = past midnight
+    hours: {
+      on: { type: Boolean, default: false },
+      days: {
+        type: [{ _id: false, open: { type: String, default: "07:00" }, close: { type: String, default: "21:00" }, closed: { type: Boolean, default: false } }],
+        default: () => Array.from({ length: 7 }, () => ({ open: "07:00", close: "21:00", closed: false })),
+      },
+    },
     seq: { type: Number, default: 0 }, // order numbers
     web: { type: String, default: "" }, // the website address the owner uses (links + the Telegram button)
   },
@@ -134,6 +142,8 @@ const orderSchema = new Schema(
     customer: { tg_id: String, username: String, name: String, phone: String },
     items: { type: [lineSchema], default: [] },
     subtotal: { type: Number, default: 0 },
+    discount: { type: Number, default: 0 }, // promo code (add-on ts_promos)
+    promo: { type: String, default: "" },
     fee: { type: Number, default: 0 },
     total: { type: Number, default: 0 },
     currency: { type: String, default: "USD" },
@@ -156,7 +166,40 @@ const orderSchema = new Schema(
 orderSchema.index({ business_id: 1, no: 1 }, { unique: true });
 orderSchema.index({ business_id: 1, created_date: -1 });
 
+// promo codes (add-on ts_promos): "SAVE10" = 10 % off, or $1 off; from an order size, until a date, so many times
+const promoSchema = new Schema(
+  {
+    ...owned,
+    code: { type: String, required: true, maxlength: 20 }, // upper case
+    kind: { type: String, enum: ["percent", "amount"], default: "percent" },
+    value: { type: Number, required: true, min: 0, max: 100000000 },
+    min_order: { type: Number, default: 0, min: 0, max: 100000000 },
+    ends_at: { type: Date, default: null },
+    max_uses: { type: Number, default: 0, min: 0, max: 1000000 }, // 0 = no limit
+    used: { type: Number, default: 0 },
+    on: { type: Boolean, default: true },
+    deleted: { type: Boolean, default: false },
+  },
+  opts,
+);
+promoSchema.index({ business_id: 1, code: 1 }, { unique: true, partialFilterExpression: { deleted: false } });
+
+// a message the owner sent to the customers in Telegram (add-on ts_broadcast)
+const broadcastSchema = new Schema(
+  {
+    ...owned,
+    text: { type: String, required: true, maxlength: 1000 },
+    total: { type: Number, default: 0 },
+    sent: { type: Number, default: 0 },
+    failed: { type: Number, default: 0 },
+    by: { type: String, default: "" },
+  },
+  opts,
+);
+
 module.exports = {
+  TgPromo: mongoose.models.TgPromo || mongoose.model("TgPromo", promoSchema),
+  TgBroadcast: mongoose.models.TgBroadcast || mongoose.model("TgBroadcast", broadcastSchema),
   TgStore: mongoose.models.TgStore || mongoose.model("TgStore", storeSchema),
   TgCategory: mongoose.models.TgCategory || mongoose.model("TgCategory", categorySchema),
   TgProduct: mongoose.models.TgProduct || mongoose.model("TgProduct", productSchema),

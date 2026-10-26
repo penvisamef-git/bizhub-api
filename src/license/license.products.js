@@ -7,6 +7,11 @@
 const PRODUCTS = {
   // Telegram Store (v2.0): a shop that opens inside Telegram (menu / products, cart, KHQR or cash, orders to the shop's group), yearly
   tg_store: { price_key: "tg_store", days: 365, category: "tg_store", service: "tg_store" },
+  ts_promos: { price_key: "ts_promos", days: 365, category: "tg_store", service: "ts_promos" }, // promo codes at checkout, yearly
+  ts_broadcast: { price_key: "ts_broadcast", days: 365, category: "tg_store", service: "ts_broadcast" }, // message the customers in Telegram, yearly
+  ts_reports: { price_key: "ts_reports", days: 365, category: "tg_store", service: "ts_reports" }, // sales report + Excel, yearly
+  ts_hours: { price_key: "ts_hours", days: null, category: "tg_store", service: "ts_hours" }, // opening hours: opens / closes by itself, forever
+  ts_nobrand: { price_key: "ts_nobrand", days: null, category: "tg_store", service: "ts_nobrand" }, // no "Made with BizHub" on the store, forever
   // Team access (v1.5): other BizHub accounts open this business as Admin / View only. Any business type, yearly.
   team: { price_key: "team_year", days: 365, category: "*", service: "team" },
   no_branding: { price_key: "remove_branding", days: null, category: "namecard", service: "namecard_branding", retired: true }, // "Made with BizHub" is gone for everyone
