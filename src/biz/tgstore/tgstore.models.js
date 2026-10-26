@@ -65,6 +65,36 @@ const storeSchema = new Schema(
         default: () => Array.from({ length: 7 }, () => ({ open: "07:00", close: "21:00", closed: false })),
       },
     },
+    // cart reminder (add-on ts_remind): a Telegram customer who left items in the cart gets one message after a while
+    remind: {
+      on: { type: Boolean, default: true },
+      after_min: { type: Number, default: 60, min: 15, max: 1440 },
+      text: { type: String, default: "", maxlength: 300 }, // "" = ours; {name} {shop} {n}
+      sent: { type: Number, default: 0 },
+      back: { type: Number, default: 0 }, // reminded carts that became an order
+      back_total: { type: Number, default: 0 },
+    },
+    // delivery zones (add-on ts_zones): a fee per area the customer picks, or by distance from the shop (the customer's pin)
+    zones: {
+      on: { type: Boolean, default: false },
+      kind: { type: String, enum: ["area", "distance"], default: "area" },
+      areas: {
+        type: [{ name: { type: String, required: true, maxlength: 60 }, fee: { type: Number, default: 0, min: 0, max: 1000000 }, min_order: { type: Number, default: 0, min: 0, max: 100000000 }, on: { type: Boolean, default: true } }],
+        default: [],
+      },
+      steps: { type: [{ _id: false, upto: { type: Number, min: 0.1, max: 200 }, fee: { type: Number, default: 0, min: 0, max: 1000000 } }], default: [] }, // up to 3 km → $1 …
+      lat: { type: Number, default: null, min: -90, max: 90 },
+      lng: { type: Number, default: null, min: -180, max: 180 },
+    },
+    // the riders' Telegram group (add-on ts_riders): delivery orders go there, a rider taps Take it → Picked up → Delivered
+    riders: {
+      chat_id: { type: String, default: "" },
+      chat_name: { type: String, default: "" },
+      connected_at: { type: Date, default: null },
+      link_code: { type: String, default: "" },
+      link_expires: { type: Date, default: null },
+      send_on: { type: String, enum: ["accepted", "ready", "manual"], default: "accepted" }, // when the order goes to the riders
+    },
     seq: { type: Number, default: 0 }, // order numbers
     web: { type: String, default: "" }, // the website address the owner uses (links + the Telegram button)
   },
@@ -122,6 +152,7 @@ const customerSchema = new Schema(
     name: { type: String, default: "", maxlength: 80 },
     phone: { type: String, default: "", maxlength: 20 },
     address: { type: String, default: "", maxlength: 200 },
+    pin: { lat: { type: Number, default: null }, lng: { type: Number, default: null } }, // the last delivery location
     can_message: { type: Boolean, default: false }, // the bot may send them their order updates
     note: { type: String, default: "", maxlength: 300 }, // the owner's own note ("likes less sugar")
     placed: { type: Number, default: 0 }, // orders sent (done or not)
@@ -179,6 +210,10 @@ const orderSchema = new Schema(
     timeline: [{ _id: false, status: String, at: { type: Date, default: Date.now }, by: String }],
     tg_msg: { chat_id: String, message_id: Number }, // the order message in the staff group (edited on every change)
     via: { type: String, enum: ["telegram", "web"], default: "web" },
+    zone: { name: { type: String, default: "" }, km: { type: Number, default: null }, lat: { type: Number, default: null }, lng: { type: Number, default: null } }, // add-on ts_zones (+ the pin)
+    rider: { tg_id: String, name: String, username: String, taken_at: Date, picked_at: Date, delivered_at: Date }, // add-on ts_riders
+    rider_msg: { chat_id: String, message_id: Number }, // the order message in the riders' group
+    from_remind: { type: Boolean, default: false }, // placed after a cart reminder
   },
   opts,
 );
@@ -216,7 +251,27 @@ const broadcastSchema = new Schema(
   opts,
 );
 
+// what a Telegram customer has in the cart and hasn't ordered yet (add-on ts_remind)
+const cartSchema = new Schema(
+  {
+    ...owned,
+    tg_id: { type: String, required: true },
+    name: { type: String, default: "" },
+    username: { type: String, default: "" },
+    can_message: { type: Boolean, default: false },
+    items: { type: [{ _id: false, product_id: ObjectId, qty: Number, options: [{ _id: false, group: String, choice: String }], note: String }], default: [] },
+    total: { type: Number, default: 0 }, // about how much (for the owner's list)
+    at: { type: Date, default: Date.now }, // last change
+    reminded_at: { type: Date, default: null }, // looked at by the reminder (sent or not)
+    reminded: { type: Boolean, default: false }, // the message really went
+  },
+  opts,
+);
+cartSchema.index({ business_id: 1, tg_id: 1 }, { unique: true });
+cartSchema.index({ reminded_at: 1, at: 1 });
+
 module.exports = {
+  TgCart: mongoose.models.TgCart || mongoose.model("TgCart", cartSchema),
   TgPromo: mongoose.models.TgPromo || mongoose.model("TgPromo", promoSchema),
   TgBroadcast: mongoose.models.TgBroadcast || mongoose.model("TgBroadcast", broadcastSchema),
   TgStore: mongoose.models.TgStore || mongoose.model("TgStore", storeSchema),

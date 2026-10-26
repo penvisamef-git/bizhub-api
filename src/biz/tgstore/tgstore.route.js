@@ -20,8 +20,12 @@
 //   POST /api/public/tgstore/:slug/orders           { items:[{ product_id, qty, options:[{ group, choice }], note }], mode, table, address, name, phone, note, pay }
 //   GET  /api/public/tgstore/order/:token           follow one order (KHQR is checked here)
 //   POST /api/public/tgstore/order/:token/proof     (multipart "photo") a screenshot of the payment
+//   PUT  /api/public/tgstore/:slug/cart             (Telegram, add-on ts_remind) what is in the cart, for the reminder
+//   POST /api/public/tgstore/:slug/fee              (add-on ts_zones) { pin } → the delivery fee for that place
 // Telegram: /start st_<slug> → the "Open the store" button · /start ts_<code> → this chat gets the orders ·
-//           buttons "tgo:<orderId>:<action>" in that chat
+//           buttons "tgo:<orderId>:<action>" in that chat · /start tr_<code> → the riders' group (add-on ts_riders),
+//           buttons "tgr:<orderId>:take|picked|done|back" there
+// Scheduler: tick() (called from /api/cron/daily-report) sends the cart reminders (add-on ts_remind)
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 const multer = require("multer");
@@ -45,7 +49,7 @@ const TZ = 7;
 const DEFAULT_SITE = "https://bizhub-cambodia.web.app";
 const LIMITS = { products: 500, categories: 40, items: 40, qty: 99, options: 6, choices: 12, promos: 50, broadcastsPerDay: 3, broadcastReach: 500 };
 // add-ons, paid with coins (license products); yearly ones end, the others are forever
-const ADDONS = ["ts_promos", "ts_broadcast", "ts_reports", "ts_hours", "ts_nobrand", "ts_history", "ts_pay", "ts_link"];
+const ADDONS = ["ts_promos", "ts_broadcast", "ts_reports", "ts_hours", "ts_nobrand", "ts_history", "ts_pay", "ts_link", "ts_remind", "ts_zones", "ts_riders"];
 const HISTORY_DAYS = 60; // orders older than this need ts_history
 const FREE_PAY = 3; // KHQR + Cash + 1 of the owner's own; more (and pictures) = ts_pay
 const THEMES = require("./tgstore.themes");
@@ -102,6 +106,16 @@ const MSG = {
   payImage: "បើក “វិធីបង់ប្រាក់បន្ថែម” ដើម្បីដាក់រូប QR។ / Unlock “More ways to pay” to add a QR picture.",
   badSlug: "តំណ៖ អក្សរ a–z លេខ និង - (3–30)! / Link: 3–30 letters a–z, numbers and -.",
   slugTaken: "តំណនេះមានអ្នកប្រើហើយ! / This link is taken.",
+  needArea: "សូមជ្រើសតំបន់ដឹកជញ្ជូន! / Choose your delivery area.",
+  needPin: "សូមចែករំលែកទីតាំងរបស់អ្នក! / Please share your location.",
+  badPin: "ទីតាំងមិនត្រឹមត្រូវ! / This location doesn't work.",
+  tooFar: "ឆ្ងាយពេក — ហាងដឹកបានដល់ {km} គម។ / Too far — the shop delivers up to {km} km.",
+  needShopPin: "សូមដាក់ទីតាំងហាងជាមុនសិន! / Set the shop's location first.",
+  needSteps: "សូមបញ្ចូលតម្លៃដឹកយ៉ាងតិចមួយ! / Add at least one delivery price.",
+  needAreas: "សូមបញ្ចូលតំបន់យ៉ាងតិចមួយ! / Add at least one area.",
+  ridersSent: "បានផ្ញើទៅក្រុមអ្នកដឹក! / Sent to the riders.",
+  ridersNotConnected: "មិនទាន់ភ្ជាប់ក្រុមអ្នកដឹកទេ។ / The riders' group isn't connected yet.",
+  notDelivery: "មានតែការកម្ម៉ង់ដឹកជញ្ជូនប៉ុណ្ណោះ។ / Only delivery orders.",
 };
 class Bad extends Error {
   constructor(message, status = 400, extra = {}) {
@@ -146,6 +160,62 @@ const slugBase = (name) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 24);
 const esc = telegram.escape;
+// ---------- places (add-on ts_zones) ----------
+// a pin from { lat, lng }, "11.55, 104.92" or a Google Maps link
+function pinOf(v) {
+  let lat;
+  let lng;
+  if (v && typeof v === "object") {
+    lat = Number(v.lat);
+    lng = Number(v.lng);
+  } else {
+    let t = String(v || "").slice(0, 600);
+    try {
+      t = decodeURIComponent(t);
+    } catch {
+      /* keep it as it is */
+    }
+    const m = /@(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/.exec(t) || /[?&](?:q|query|ll|destination)=(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/.exec(t) || /^\s*(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$/.exec(t);
+    if (!m) return null;
+    lat = Number(m[1]);
+    lng = Number(m[2]);
+  }
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) return null;
+  return { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6 };
+}
+// straight-line distance in km
+function kmBetween(a, b) {
+  const r = (d) => (d * Math.PI) / 180;
+  const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2;
+  return Math.round(12742 * Math.asin(Math.sqrt(h)) * 10) / 10;
+}
+const mapLink = (p) => `https://maps.google.com/?q=${p.lat},${p.lng}`;
+const zonesOn = (s, addons) => !!(addons?.ts_zones?.active && s.zones?.on);
+// the delivery fee for an area or a pin (before "free from"); throws when it can't be delivered
+function zoneFee(s, { area, pin }) {
+  const z = s.zones;
+  if (z.kind === "area") {
+    const a = validId(area) ? z.areas.find((x) => String(x._id) === String(area) && x.on) : null;
+    if (!a) throw new Bad(MSG.needArea, 400, { code: "need_area" });
+    return { fee: a.fee || 0, min_order: a.min_order || 0, zone: { name: a.name, km: null, ...(pin || {}) } };
+  }
+  if (!pin) throw new Bad(MSG.needPin, 400, { code: "need_pin" });
+  if (z.lat === null || z.lng === null || z.lat === undefined) throw new Bad(MSG.badPin, 400, { code: "no_shop_pin" });
+  const km = kmBetween({ lat: z.lat, lng: z.lng }, pin);
+  const steps = [...(z.steps || [])].sort((a, b) => a.upto - b.upto);
+  const step = steps.find((x) => km <= x.upto);
+  if (!step) throw new Bad(fill(MSG.tooFar, { km: steps[steps.length - 1]?.upto || 0 }), 400, { code: "too_far", km, max_km: steps[steps.length - 1]?.upto || 0 });
+  return { fee: step.fee || 0, min_order: 0, zone: { name: `${km} km`, km, ...pin } };
+}
+// what the customer sees about the zones
+const zonesOut = (s, addons) =>
+  zonesOn(s, addons)
+    ? {
+        kind: s.zones.kind,
+        areas: s.zones.kind === "area" ? s.zones.areas.filter((a) => a.on).map((a) => ({ _id: a._id, name: a.name, fee: a.fee, min_order: a.min_order })) : [],
+        steps: s.zones.kind === "distance" ? [...s.zones.steps].sort((a, b) => a.upto - b.upto).map((x) => ({ upto: x.upto, fee: x.fee })) : [],
+      }
+    : null;
 const siteOf = (s) => String(s?.web || process.env.WEB_URL || DEFAULT_SITE).replace(/\/+$/, "");
 
 // ---------- Telegram Mini App: check who opened the store (the init data Telegram signs with the bot token) ----------
@@ -278,6 +348,7 @@ const storeOut = (s) => {
   const o = s.toObject ? s.toObject() : { ...s };
   const tg = { connected: !!o.tg?.chat_id, chat_name: o.tg?.chat_name || "" };
   delete o.tg;
+  o.riders = { connected: !!o.riders?.chat_id, chat_name: o.riders?.chat_name || "", send_on: o.riders?.send_on || "accepted" };
   delete o.seq;
   const pay = { ...o.pay, custom: (o.pay?.custom || []).map((m) => ({ _id: m._id, name: m.name, info: m.info, image: m.image?.url || "", on: m.on })) };
   return { ...o, pay, logo: o.logo?.url || "", tg };
@@ -318,6 +389,10 @@ const orderOut = (o, full = false) => ({
   reason: o.reason,
   timeline: o.timeline,
   via: o.via,
+  zone: o.zone?.name || o.zone?.lat ? { name: o.zone.name || "", km: o.zone.km ?? null, lat: o.zone.lat ?? null, lng: o.zone.lng ?? null } : null,
+  rider: o.rider?.tg_id ? { name: o.rider.name || "", username: o.rider.username || "", taken_at: o.rider.taken_at || null, picked_at: o.rider.picked_at || null, delivered_at: o.rider.delivered_at || null } : null,
+  riders_sent: !!o.rider_msg?.message_id,
+  from_remind: !!o.from_remind,
   created_date: o.created_date,
   ...(full ? { token: o.token } : {}),
 });
@@ -367,6 +442,8 @@ function groupText(s, o) {
   const who = [o.customer?.name && `<b>${esc(o.customer.name)}</b>`, o.customer?.phone && esc(o.customer.phone), o.customer?.username && `@${esc(o.customer.username)}`].filter(Boolean).join(" · ");
   if (who) lines.push(`👤 ${who}`);
   if (o.mode === "delivery" && o.address) lines.push(`📍 ${esc(o.address)}`);
+  if (o.mode === "delivery") lines.push(...placeLines(o));
+  if (o.rider?.tg_id) lines.push(`🛵 ${esc(o.rider.name || "Rider")}${o.rider.username ? ` @${esc(o.rider.username)}` : ""} · ${o.rider.delivered_at ? "delivered · ដឹករួច" : o.rider.picked_at ? "on the way · កំពុងដឹក" : "took it · បានយក"}`);
   if (o.note) lines.push(`📝 ${esc(o.note)}`);
   if (o.status === "cancelled" && o.reason) lines.push(`❌ ${esc(o.reason)}`);
   const last = o.timeline?.[o.timeline.length - 1];
@@ -374,9 +451,18 @@ function groupText(s, o) {
   lines.push(`<i>${esc(s.shop_name)}</i>`);
   return lines.join("\n");
 }
-function groupKeys(o) {
+// the delivery area / distance + the map pin
+function placeLines(o) {
+  const out = [];
+  const z = o.zone || {};
+  const where = [z.name && !/ km$/.test(z.name) ? esc(z.name) : "", z.km !== null && z.km !== undefined ? `${z.km} km` : ""].filter(Boolean).join(" · ");
+  if (where || z.lat) out.push(`🗺 ${where}${z.lat !== null && z.lat !== undefined ? `${where ? " · " : ""}<a href="${mapLink(z)}">Map · ផែនទី</a>` : ""}`);
+  return out;
+}
+function groupKeys(o, { riders } = {}) {
   const b = (text, act) => ({ text, callback_data: `tgo:${o._id}:${act}` });
   const rows = [];
+  if (riders && o.mode === "delivery" && ["accepted", "ready"].includes(o.status) && !o.rider_msg?.message_id) rows.push([b("🛵 Send to riders · ផ្ញើទៅអ្នកដឹក", "riders")]);
   if (o.status === "new") rows.push([b("✅ Accept · ទទួល", "accept"), b("⏱ 15 min", "eta15"), b("⏱ 30 min", "eta30")], [b("❌ Reject · បដិសេធ", "reject")]);
   else if (o.status === "accepted") rows.push(o.mode === "delivery" ? [b("🛵 On the way · ដឹក", "on_way"), b("🎉 Done", "done")] : [b("🍽 Ready · រួចរាល់", "ready"), b("🎉 Done", "done")]);
   else if (o.status === "ready") rows.push([b("🎉 Done · រួចរាល់", "done")]);
@@ -388,13 +474,14 @@ function groupKeys(o) {
 async function postToGroup(s, o) {
   const chat = s.tg?.chat_id;
   if (!chat || !telegram.ready()) return;
+  const keys = groupKeys(o, { riders: !!s.riders?.chat_id && (await addonsOf(s.business_id)).ts_riders.active });
   try {
     if (o.tg_msg?.message_id && o.tg_msg.chat_id === chat) {
-      await telegram.editText(chat, o.tg_msg.message_id, groupText(s, o), groupKeys(o)).catch((err) => {
+      await telegram.editText(chat, o.tg_msg.message_id, groupText(s, o), keys).catch((err) => {
         if (!/not modified/i.test(err.message)) throw err;
       });
     } else {
-      const m = await telegram.send(chat, groupText(s, o), groupKeys(o));
+      const m = await telegram.send(chat, groupText(s, o), keys);
       o.tg_msg = { chat_id: chat, message_id: m.message_id };
       await M.TgOrder.updateOne({ _id: o._id }, { $set: { tg_msg: o.tg_msg } });
     }
@@ -402,14 +489,74 @@ async function postToGroup(s, o) {
     if (err instanceof telegram.TelegramError && err.message === "blocked") await M.TgStore.updateOne({ _id: s._id }, { $set: { "tg.chat_id": "", "tg.chat_name": "" } });
   }
 }
+// ---------- the riders' group (add-on ts_riders) ----------
+const RIDER_STEP = {
+  wait: "🙋 Waiting for a rider · រង់ចាំអ្នកដឹក",
+  taken: "✋ Taken · បានយក",
+  picked: "🛵 On the way · កំពុងដឹក",
+  done: "🎉 Delivered · ដឹករួច",
+  cancelled: "❌ Cancelled · បានបោះបង់",
+};
+function riderStep(o) {
+  if (o.status === "cancelled") return "cancelled";
+  if (o.rider?.delivered_at || o.status === "done") return "done";
+  if (o.rider?.picked_at) return "picked";
+  if (o.rider?.tg_id) return "taken";
+  return "wait";
+}
+function riderText(s, o) {
+  const cur = o.currency;
+  const step = riderStep(o);
+  const lines = [`🛵 <b>#${o.no}</b> · ${esc(s.shop_name)} · <b>${RIDER_STEP[step]}</b>`, ""];
+  if (o.address) lines.push(`📍 ${esc(o.address)}`);
+  lines.push(...placeLines(o));
+  const who = [o.customer?.name && `<b>${esc(o.customer.name)}</b>`, o.customer?.phone && esc(o.customer.phone), o.customer?.username && `@${esc(o.customer.username)}`].filter(Boolean).join(" · ");
+  if (who) lines.push(`👤 ${who}`);
+  lines.push(`🧾 ${o.items.reduce((a, l) => a + l.qty, 0)} items · ទំនិញ · Total · សរុប ${fmtMoney(o.total, cur)}`);
+  lines.push(o.pay?.status === "paid" ? "✅ Paid already · បានបង់រួច" : `💵 Collect · ប្រមូល <b>${fmtMoney(o.total, cur)}</b>`);
+  if (o.fee) lines.push(`🛵 Delivery fee · ថ្លៃដឹក ${fmtMoney(o.fee, cur)}`);
+  if (o.note) lines.push(`📝 ${esc(o.note)}`);
+  if (o.rider?.tg_id) lines.push("", `<i>${esc(o.rider.name || "Rider")}${o.rider.username ? ` @${esc(o.rider.username)}` : ""}</i>`);
+  return lines.join("\n");
+}
+function riderKeys(o) {
+  const b = (text, act) => ({ text, callback_data: `tgr:${o._id}:${act}` });
+  const step = riderStep(o);
+  if (step === "wait") return telegram.keyboard([[b("🙋 Take it · យក", "take")]]);
+  if (step === "taken") return telegram.keyboard([[b("📦 Picked up · បានយក", "picked")], [b("↩️ Give back · ប្រគល់វិញ", "back")]]);
+  if (step === "picked") return telegram.keyboard([[b("🎉 Delivered · ដឹករួច", "done")]]);
+  return { reply_markup: { inline_keyboard: [] } };
+}
+// put the order in the riders' group (send = a new message when there is none yet), or change the one there
+async function postToRiders(s, o, send = false) {
+  const chat = s.riders?.chat_id;
+  if (!chat || !telegram.ready() || o.mode !== "delivery") return false;
+  try {
+    if (o.rider_msg?.message_id && o.rider_msg.chat_id === chat) {
+      await telegram.editText(chat, o.rider_msg.message_id, riderText(s, o), riderKeys(o)).catch((err) => {
+        if (!/not modified/i.test(err.message)) throw err;
+      });
+      return true;
+    }
+    if (!send) return false;
+    const m = await telegram.send(chat, riderText(s, o), riderKeys(o));
+    o.rider_msg = { chat_id: chat, message_id: m.message_id };
+    await M.TgOrder.updateOne({ _id: o._id }, { $set: { rider_msg: o.rider_msg } });
+    return true;
+  } catch (err) {
+    if (err instanceof telegram.TelegramError && err.message === "blocked") await M.TgStore.updateOne({ _id: s._id }, { $set: { "riders.chat_id": "", "riders.chat_name": "" } });
+    return false;
+  }
+}
+
 // the customer's own chat with the bot (only when they allowed messages)
-async function tellCustomer(s, o, text) {
+async function tellCustomer(s, o, text, more = []) {
   if (!o.customer?.tg_id || !telegram.ready() || !o.customer_id) return;
   const c = await M.TgCustomer.findById(o.customer_id).select("can_message").lean();
   if (!c?.can_message) return;
   const link = `${siteOf(s)}/t/o/${o.token}`;
   await telegram
-    .send(o.customer.tg_id, `<b>${esc(s.shop_name)}</b> · #${o.no}\n${text}`, telegram.keyboard([[{ text: "🧾 Order · ការកម្ម៉ង់", web_app: { url: link } }]]))
+    .send(o.customer.tg_id, `<b>${esc(s.shop_name)}</b> · #${o.no}\n${text}`, telegram.keyboard([[{ text: "🧾 Order · ការកម្ម៉ង់", web_app: { url: link } }], ...more]))
     .catch(async (err) => {
       if (err instanceof telegram.TelegramError && err.message === "blocked") await M.TgCustomer.updateOne({ _id: o.customer_id }, { $set: { can_message: false } });
     });
@@ -417,7 +564,8 @@ async function tellCustomer(s, o, text) {
 const CUSTOMER_TEXT = {
   accepted: (o) => `✅ The shop accepted your order${o.eta_min ? ` · about ${o.eta_min} min` : ""}.\nហាងបានទទួលការកម្ម៉ង់របស់អ្នក${o.eta_min ? ` · ប្រហែល ${o.eta_min} នាទី` : ""}។`,
   ready: () => "🍽 Your order is ready.\nការកម្ម៉ង់របស់អ្នករួចរាល់ហើយ។",
-  on_way: () => "🛵 Your order is on the way.\nការកម្ម៉ង់របស់អ្នកកំពុងដឹកមក។",
+  on_way: (o) => (o.rider?.name ? `🛵 ${o.rider.name} is bringing your order.\n${o.rider.name} កំពុងដឹកការកម្ម៉ង់របស់អ្នកមក។` : "🛵 Your order is on the way.\nការកម្ម៉ង់របស់អ្នកកំពុងដឹកមក។"),
+  taken: (o) => `🙋 ${o.rider?.name || "A rider"} will bring your order.\n${o.rider?.name || "អ្នកដឹក"} នឹងដឹកការកម្ម៉ង់របស់អ្នក។`,
   done: () => "🎉 Done — thank you!\nរួចរាល់ — សូមអរគុណ!",
   cancelled: (o) => `❌ The shop cancelled your order${o.reason ? `: ${o.reason}` : ""}.\nហាងបានបោះបង់ការកម្ម៉ង់របស់អ្នក។`,
   paid: () => "💰 Payment received.\nបានទទួលការបង់ប្រាក់។",
@@ -437,8 +585,16 @@ async function moveOrder(s, o, status, by, { eta, reason } = {}) {
   if (!after) throw new Bad(MSG.badStep, 409, { code: "changed" });
   if (status === "cancelled") await giveBackStock(after);
   if (status === "done" && after.customer_id) await M.TgCustomer.updateOne({ _id: after.customer_id }, { $inc: { orders: 1, spent: after.total }, $set: { last_order_at: after.created_date } });
+  const addons = await addonsOf(s.business_id);
+  // the riders' group: send it when the shop says so (accepted / ready), and keep the message there up to date
+  if (addons.ts_riders.active && after.mode === "delivery") {
+    const sendNow = s.riders?.send_on === status && !after.rider_msg?.message_id;
+    await postToRiders(s, after, sendNow);
+  } else if (after.rider_msg?.message_id) await postToRiders(s, after);
   await postToGroup(s, after);
-  await tellCustomer(s, after, CUSTOMER_TEXT[status](after));
+  // done: "Order again" under the message (add-on ts_remind)
+  const again = status === "done" && addons.ts_remind.active ? [[{ text: "🔁 Order again · កម្ម៉ង់ម្តងទៀត", web_app: { url: `${siteOf(s)}/t/${s.slug}?again=${after.token}` } }]] : [];
+  await tellCustomer(s, after, CUSTOMER_TEXT[status](after), again);
   return after;
 }
 async function markPaid(s, o, by) {
@@ -450,8 +606,57 @@ async function markPaid(s, o, by) {
   );
   if (!after) return M.TgOrder.findById(o._id);
   await postToGroup(s, after);
+  if (after.rider_msg?.message_id) await postToRiders(s, after);
   await tellCustomer(s, after, CUSTOMER_TEXT.paid());
   return after;
+}
+
+// ---------- cart reminders (add-on ts_remind), from the scheduler ----------
+const REMIND_TEXT = "🛒 <b>{shop}</b>\nYou left {n} in your cart. Tap to finish your order.\nអ្នកនៅមានទំនិញ {n} ក្នុងកន្ត្រក។ ចុចដើម្បីបញ្ចប់ការកម្ម៉ង់។";
+async function tick() {
+  if (!telegram.ready()) return { carts: 0, sent: 0 };
+  const now = Date.now();
+  const rows = await M.TgCart.find({ reminded_at: null, "items.0": { $exists: true }, at: { $lte: new Date(now - 15 * 60000), $gte: new Date(now - 24 * 3600000) } })
+    .sort({ at: 1 })
+    .limit(300);
+  const shops = new Map(); // business → { s, ok } (checked once per run)
+  let sent = 0;
+  for (const c of rows) {
+    const key = String(c.business_id);
+    if (!shops.has(key)) {
+      const s = await M.TgStore.findOne({ business_id: c.business_id });
+      const [license, addons, business] = s ? await Promise.all([licenseState(c.business_id), addonsOf(c.business_id), Business.findOne({ _id: c.business_id, deleted: false }).select("status").lean()]) : [];
+      shops.set(key, { s, ok: !!(s && business?.status && !license.locked && addons.ts_remind.active && s.remind?.on), open: !!s && openNow(s, license, addons).open });
+    }
+    const { s, ok, open } = shops.get(key);
+    if (!ok) {
+      c.reminded_at = new Date(); // the add-on is off: never remind this cart
+      await c.save();
+      continue;
+    }
+    if (now - c.at.getTime() < (s.remind.after_min || 60) * 60000 || !open) continue; // not yet / the shop is closed: later
+    const cust = await M.TgCustomer.findOne({ business_id: c.business_id, tg_id: c.tg_id }).select("can_message").lean();
+    c.reminded_at = new Date();
+    if (c.can_message || cust?.can_message) {
+      const n = c.items.reduce((a, l) => a + (l.qty || 1), 0);
+      const what = `${n} ${n === 1 ? "item" : "items"}`;
+      const text = s.remind.text ? `🛒 <b>${esc(s.shop_name)}</b>\n${esc(fill(s.remind.text, { name: c.name || "", shop: s.shop_name, n }))}` : fill(REMIND_TEXT, { shop: esc(s.shop_name), n: what });
+      const ok2 = await telegram
+        .send(c.tg_id, text, telegram.keyboard([[{ text: "🛒 Finish my order · បញ្ចប់ការកម្ម៉ង់", web_app: { url: `${siteOf(s)}/t/${s.slug}` } }]]))
+        .then(() => true)
+        .catch(async (err) => {
+          if (err instanceof telegram.TelegramError && err.message === "blocked") await M.TgCustomer.updateOne({ business_id: c.business_id, tg_id: c.tg_id }, { $set: { can_message: false } });
+          return false;
+        });
+      if (ok2) {
+        c.reminded = true;
+        sent += 1;
+        await M.TgStore.updateOne({ _id: s._id }, { $inc: { "remind.sent": 1 } });
+      }
+    }
+    await c.save();
+  }
+  return { carts: rows.length, sent };
 }
 
 // ---------- uploads ----------
@@ -583,6 +788,7 @@ module.exports = (prop) => {
         counts,
         links: { web: links.web, telegram: links.telegram, bot: links.bot },
         telegram: { configured: telegram.ready(), connected: !!ctx.store.tg?.chat_id, chat_name: ctx.store.tg?.chat_name || "" },
+        riders: { connected: !!ctx.store.riders?.chat_id, chat_name: ctx.store.riders?.chat_name || "", send_on: ctx.store.riders?.send_on || "accepted" },
         khqr_auto: khqr.configured(),
         addons,
         open_now: openNow(ctx.store, ctx.license, ctx.addons),
@@ -650,6 +856,46 @@ module.exports = (prop) => {
       }
       if (b.hours.on !== undefined) s.hours.on = !!b.hours.on;
     }
+    // cart reminder (add-on ts_remind)
+    if (b.remind) {
+      if (b.remind.on !== undefined) s.remind.on = !!b.remind.on;
+      if (b.remind.after_min !== undefined) s.remind.after_min = int(b.remind.after_min, 15, 1440, 60);
+      if (b.remind.text !== undefined) s.remind.text = str(b.remind.text, 300);
+    }
+    // delivery zones (add-on ts_zones)
+    if (b.zones) {
+      const z = b.zones;
+      if (z.on) needAddon(ctx, "ts_zones");
+      if (z.kind !== undefined) s.zones.kind = z.kind === "distance" ? "distance" : "area";
+      if (z.areas !== undefined) {
+        if (!Array.isArray(z.areas) || z.areas.length > 40) throw new Bad(MSG.tooMany);
+        s.zones.areas = z.areas.map((a) => {
+          const name = str(a?.name, 60);
+          if (!name) throw new Bad(MSG.needName, 400, { code: "need_area_name" });
+          return { ...(validId(a?._id) ? { _id: a._id } : {}), name, fee: money(a?.fee || 0, cur) ?? 0, min_order: money(a?.min_order || 0, cur) ?? 0, on: a?.on !== false };
+        });
+      }
+      if (z.steps !== undefined) {
+        if (!Array.isArray(z.steps) || z.steps.length > 12) throw new Bad(MSG.tooMany);
+        s.zones.steps = z.steps
+          .map((x) => ({ upto: Math.round(Number(x?.upto) * 10) / 10, fee: money(x?.fee || 0, cur) ?? 0 }))
+          .filter((x) => Number.isFinite(x.upto) && x.upto >= 0.1 && x.upto <= 200)
+          .sort((a, b2) => a.upto - b2.upto);
+      }
+      if (z.pin !== undefined) {
+        const pin = z.pin ? pinOf(z.pin) : null;
+        if (z.pin && !pin) throw new Bad(MSG.badPin, 400, { code: "bad_pin" });
+        s.zones.lat = pin ? pin.lat : null;
+        s.zones.lng = pin ? pin.lng : null;
+      }
+      if (z.on !== undefined) s.zones.on = !!z.on;
+      if (s.zones.on && s.zones.kind === "area" && !s.zones.areas.some((a) => a.on)) throw new Bad(MSG.needAreas, 400, { code: "need_areas" });
+      if (s.zones.on && s.zones.kind === "distance") {
+        if (s.zones.lat === null || s.zones.lat === undefined) throw new Bad(MSG.needShopPin, 400, { code: "need_shop_pin" });
+        if (!s.zones.steps.length) throw new Bad(MSG.needSteps, 400, { code: "need_steps" });
+      }
+    }
+    if (b.riders?.send_on !== undefined) s.riders.send_on = ["accepted", "ready", "manual"].includes(b.riders.send_on) ? b.riders.send_on : "accepted";
     if (!s.delivery.on && !s.pickup.on && !s.dine_in.on) throw new Bad(MSG.badMode, 400, { code: "need_mode" });
     if (!s.pay.cash.on && !s.pay.khqr.on) throw new Bad(MSG.badPay, 400, { code: "need_pay" });
     await s.save();
@@ -1196,6 +1442,96 @@ module.exports = (prop) => {
     res.json({ success: true, data: { connected: false, chat_name: "" }, message: MSG.saved });
   });
 
+  // ---------------------------------------- the riders' group (add-on ts_riders) ----------------------------------------
+  // who delivered what in the last 30 days
+  door("get", "/riders", {}, async (ctx, req, res) => {
+    const since = new Date(Date.now() - 30 * DAY);
+    const rows = await M.TgOrder.aggregate([
+      { $match: { business_id: ctx.business._id, "rider.tg_id": { $gt: "" }, created_date: { $gte: since } } },
+      {
+        $group: {
+          _id: "$rider.tg_id",
+          name: { $last: "$rider.name" },
+          username: { $last: "$rider.username" },
+          taken: { $sum: 1 },
+          delivered: { $sum: { $cond: [{ $eq: ["$status", "done"] }, 1, 0] } },
+          fees: { $sum: { $cond: [{ $eq: ["$status", "done"] }, "$fee", 0] } },
+          minutes: { $avg: { $cond: [{ $and: ["$rider.picked_at", "$rider.delivered_at"] }, { $divide: [{ $subtract: ["$rider.delivered_at", "$rider.picked_at"] }, 60000] }, null] } },
+          last: { $max: "$rider.taken_at" },
+        },
+      },
+      { $sort: { delivered: -1, taken: -1 } },
+      { $limit: 50 },
+    ]);
+    const waiting = await M.TgOrder.countDocuments({ business_id: ctx.business._id, mode: "delivery", status: { $in: ["accepted", "ready"] }, "rider_msg.message_id": { $gt: 0 }, "rider.tg_id": { $in: [null, ""] } });
+    res.json({
+      success: true,
+      data: {
+        connected: !!ctx.store.riders?.chat_id,
+        chat_name: ctx.store.riders?.chat_name || "",
+        send_on: ctx.store.riders?.send_on || "accepted",
+        waiting,
+        riders: rows.map((r) => ({ tg_id: r._id, name: r.name || "", username: r.username || "", taken: r.taken, delivered: r.delivered, fees: money(r.fees || 0, ctx.store.currency), minutes: r.minutes === null ? null : Math.round(r.minutes), last: r.last })),
+      },
+    });
+  });
+  door("post", "/riders/link", { write: true }, async (ctx, req, res) => {
+    needAddon(ctx, "ts_riders");
+    if (!telegram.ready()) throw new Bad(MSG.tgNotConfigured, 503);
+    const bot = await telegram.botUsername().catch(tgFail);
+    const code = `tr_${token(24)}`;
+    ctx.store.riders.link_code = code;
+    ctx.store.riders.link_expires = new Date(Date.now() + 15 * 60000);
+    await ctx.store.save();
+    res.json({ success: true, data: { group_url: `https://t.me/${bot}?startgroup=${code}`, url: `https://t.me/${bot}?start=${code}`, bot, expires_at: ctx.store.riders.link_expires } });
+  });
+  door("post", "/riders/test", { write: true }, async (ctx, req, res) => {
+    needAddon(ctx, "ts_riders");
+    const chat = ctx.store.riders?.chat_id;
+    if (!chat) throw new Bad(MSG.ridersNotConnected);
+    await telegram.send(chat, `🛵 <b>${esc(ctx.store.shop_name)}</b>\nTest from BizHub — delivery orders will come here. Tap “Take it” to deliver one.\nសារសាកល្បង — ការកម្ម៉ង់ដឹកជញ្ជូននឹងមកទីនេះ។ ចុច “យក” ដើម្បីដឹក។`).catch(tgFail);
+    res.json({ success: true, message: MSG.tgSent });
+  });
+  door("delete", "/riders", { write: true }, async (ctx, req, res) => {
+    const chat = ctx.store.riders?.chat_id;
+    ctx.store.riders.chat_id = "";
+    ctx.store.riders.chat_name = "";
+    ctx.store.riders.connected_at = null;
+    await ctx.store.save();
+    if (chat) telegram.send(chat, "🔌 BizHub riders' group disconnected.\nបានផ្តាច់ក្រុមអ្នកដឹកហើយ។").catch(() => {});
+    res.json({ success: true, data: { connected: false, chat_name: "" }, message: MSG.saved });
+  });
+  // send one delivery order to the riders now
+  door("post", "/orders/:oid/riders", { write: true }, async (ctx, req, res) => {
+    needAddon(ctx, "ts_riders");
+    const o = await orderOf(ctx, req.params.oid);
+    if (o.mode !== "delivery") throw new Bad(MSG.notDelivery, 400, { code: "not_delivery" });
+    if (!ctx.store.riders?.chat_id) throw new Bad(MSG.ridersNotConnected, 400, { code: "riders_off" });
+    if (["done", "cancelled"].includes(o.status)) throw new Bad(MSG.badStep, 409, { code: "bad_step" });
+    if (!(await postToRiders(ctx.store, o, true))) throw new Bad(MSG.tgUnreachable, 502);
+    await postToGroup(ctx.store, o);
+    res.json({ success: true, data: orderOut(o), message: MSG.ridersSent });
+  });
+
+  // ---------------------------------------- carts left in Telegram (add-on ts_remind) ----------------------------------------
+  door("get", "/carts", {}, async (ctx, req, res) => {
+    const since = new Date(Date.now() - 7 * DAY);
+    const rows = await M.TgCart.find({ business_id: ctx.business._id, "items.0": { $exists: true }, at: { $gte: since } })
+      .sort({ at: -1 })
+      .limit(100)
+      .lean();
+    const r = ctx.store.remind || {};
+    res.json({
+      success: true,
+      data: {
+        settings: { on: r.on !== false, after_min: r.after_min || 60, text: r.text || "" },
+        stats: { sent: r.sent || 0, back: r.back || 0, back_total: r.back_total || 0 },
+        default_text: REMIND_TEXT,
+        rows: rows.map((c) => ({ _id: c._id, name: c.name, username: c.username, n: c.items.reduce((a, l) => a + (l.qty || 1), 0), total: c.total || 0, at: c.at, reminded: !!c.reminded, can_message: !!c.can_message })),
+      },
+    });
+  });
+
   telegram.onStart(async (code, chat) => {
     // the owner sends the orders to this chat (a group: t.me/<bot>?startgroup=ts_…)
     if (/^ts_[A-Za-z0-9]{10,40}$/.test(code)) {
@@ -1208,6 +1544,18 @@ module.exports = (prop) => {
       s.tg.link_expires = null;
       await s.save();
       return `✅ <b>${esc(s.shop_name)}</b>\nConnected! New Telegram Store orders will come here, with buttons to accept them.\nបានភ្ជាប់! ការកម្ម៉ង់ថ្មីនឹងមកទីនេះ ជាមួយប៊ូតុងទទួល។`;
+    }
+    // the riders' group (add-on ts_riders): t.me/<bot>?startgroup=tr_…
+    if (/^tr_[A-Za-z0-9]{10,40}$/.test(code)) {
+      const s = await M.TgStore.findOne({ "riders.link_code": code });
+      if (!s || !s.riders.link_expires || s.riders.link_expires < new Date()) return "This link has expired. Make a new one in BizHub.\nតំណនេះផុតកំណត់ហើយ។ សូមបង្កើតថ្មីក្នុង BizHub។";
+      s.riders.chat_id = String(chat.id);
+      s.riders.chat_name = (chat.title || [chat.first_name, chat.last_name].filter(Boolean).join(" ") || (chat.username ? `@${chat.username}` : "")).slice(0, 80);
+      s.riders.connected_at = new Date();
+      s.riders.link_code = "";
+      s.riders.link_expires = null;
+      await s.save();
+      return `🛵 <b>${esc(s.shop_name)}</b>\nRiders' group connected! Delivery orders will come here. The first rider to tap “Take it” delivers it.\nបានភ្ជាប់ក្រុមអ្នកដឹក! អ្នកដឹកដែលចុច “យក” មុនគេ ជាអ្នកដឹក។`;
     }
     // a customer opened the shop's bot link: answer with the button that opens the store inside Telegram
     if (/^st_[a-z0-9-]{2,40}$/.test(code)) {
@@ -1222,7 +1570,9 @@ module.exports = (prop) => {
   });
   // the staff press a button under an order in their group
   telegram.onCallback(async (data, q) => {
-    const m = /^tgo:([a-f0-9]{24}):(accept|eta15|eta30|reject|ready|on_way|done|paid)$/.exec(data);
+    const r = /^tgr:([a-f0-9]{24}):(take|picked|done|back)$/.exec(data);
+    if (r) return riderPress(r[1], r[2], q);
+    const m = /^tgo:([a-f0-9]{24}):(accept|eta15|eta30|reject|ready|on_way|done|paid|riders)$/.exec(data);
     if (!m) return null;
     const o = await M.TgOrder.findById(m[1]);
     if (!o) return { toast: "Order not found · រកមិនឃើញ", alert: true };
@@ -1231,6 +1581,14 @@ module.exports = (prop) => {
     const by = [q.from?.first_name, q.from?.last_name].filter(Boolean).join(" ") || (q.from?.username ? `@${q.from.username}` : "Staff");
     try {
       const act = m[2];
+      if (act === "riders") {
+        const addons = await addonsOf(s.business_id);
+        if (!addons.ts_riders.active || !s.riders?.chat_id) return { toast: "Riders' group not connected · មិនទាន់ភ្ជាប់ក្រុមអ្នកដឹក", alert: true };
+        if (o.rider_msg?.message_id) return { toast: "Already sent · បានផ្ញើរួច" };
+        await postToRiders(s, o, true);
+        await postToGroup(s, o);
+        return { toast: "🛵 Sent · បានផ្ញើ" };
+      }
       if (act === "paid") await markPaid(s, o, by);
       else if (act === "accept") await moveOrder(s, o, "accepted", by);
       else if (act === "eta15" || act === "eta30") await moveOrder(s, o, "accepted", by, { eta: act === "eta15" ? 15 : 30 });
@@ -1245,6 +1603,66 @@ module.exports = (prop) => {
     }
     return { toast: "✅" };
   });
+
+  // a rider presses a button under an order in the riders' group
+  async function riderPress(oid, act, q) {
+    const o = await M.TgOrder.findById(oid);
+    if (!o) return { toast: "Order not found · រកមិនឃើញ", alert: true };
+    const s = await M.TgStore.findOne({ business_id: o.business_id });
+    if (!s || String(q.message?.chat?.id) !== s.riders?.chat_id) return { toast: "Not this shop's riders · មិនមែនក្រុមអ្នកដឹកហាងនេះ", alert: true };
+    const me = { tg_id: String(q.from?.id || ""), name: ([q.from?.first_name, q.from?.last_name].filter(Boolean).join(" ") || (q.from?.username ? `@${q.from.username}` : "Rider")).slice(0, 60), username: String(q.from?.username || "").slice(0, 40) };
+    if (!me.tg_id) return { toast: "?" };
+    const mine = o.rider?.tg_id && o.rider.tg_id === me.tg_id;
+    const refresh = async () => postToRiders(s, await M.TgOrder.findById(o._id));
+    if (["done", "cancelled"].includes(o.status)) {
+      await refresh();
+      return { toast: o.status === "done" ? "Already delivered · ដឹករួចហើយ" : "Cancelled · បានបោះបង់", alert: true };
+    }
+    if (act === "take") {
+      if (o.status === "new") return { toast: "The shop hasn't accepted it yet · ហាងមិនទាន់ទទួល", alert: true };
+      const after = await M.TgOrder.findOneAndUpdate(
+        { _id: o._id, "rider.tg_id": { $in: [null, ""] }, status: { $in: ["accepted", "ready", "on_way"] } },
+        { $set: { rider: { ...me, taken_at: new Date(), picked_at: null, delivered_at: null } }, $push: { timeline: { status: "rider", at: new Date(), by: me.name } } },
+        { returnDocument: "after" },
+      );
+      if (!after) {
+        await refresh();
+        return { toast: `Taken by ${o.rider?.name || "another rider"} · មានអ្នកយករួច`, alert: true };
+      }
+      await postToRiders(s, after);
+      await postToGroup(s, after);
+      await tellCustomer(s, after, CUSTOMER_TEXT.taken(after));
+      return { toast: "✋ It's yours · ជារបស់អ្នក" };
+    }
+    if (!mine) return { toast: o.rider?.tg_id ? `Taken by ${o.rider.name} · ${o.rider.name} បានយក` : "Tap “Take it” first · ចុច “យក” ជាមុន", alert: true };
+    if (act === "back") {
+      if (o.rider.picked_at) return { toast: "Already picked up · បានយករួច", alert: true };
+      const after = await M.TgOrder.findOneAndUpdate({ _id: o._id, "rider.tg_id": me.tg_id, "rider.picked_at": null }, { $set: { rider: { tg_id: "", name: "", username: "" } } }, { returnDocument: "after" });
+      if (after) {
+        await postToRiders(s, after);
+        await postToGroup(s, after);
+      }
+      return { toast: "↩️" };
+    }
+    try {
+      if (act === "picked") {
+        const after = await M.TgOrder.findOneAndUpdate({ _id: o._id, "rider.tg_id": me.tg_id }, { $set: { "rider.picked_at": o.rider.picked_at || new Date() } }, { returnDocument: "after" });
+        if (after.status === "on_way") await postToRiders(s, after);
+        else await moveOrder(s, after, "on_way", me.name);
+        return { toast: "📦 ✅" };
+      }
+      // delivered
+      const after = await M.TgOrder.findOneAndUpdate({ _id: o._id, "rider.tg_id": me.tg_id }, { $set: { "rider.delivered_at": new Date(), "rider.picked_at": o.rider.picked_at || new Date() } }, { returnDocument: "after" });
+      await moveOrder(s, after, "done", me.name);
+      return { toast: "🎉" };
+    } catch (err) {
+      if (err instanceof Bad) {
+        await refresh();
+        return { toast: "Already changed · បានប្តូររួចហើយ" };
+      }
+      throw err;
+    }
+  }
 
   // ---------------------------------------- public: the store ----------------------------------------
   async function openStore(slug) {
@@ -1276,7 +1694,7 @@ module.exports = (prop) => {
       res.json({
         success: true,
         data: {
-          store: { ...lookOut(store), ...(THEMES.KEYS.includes(String(req.query.theme || "")) ? { theme: String(req.query.theme), preview: true } : {}), open: now.open, opens: now.next, hours: hoursOut(store, addons), promo: !!addons.ts_promos.active, brand: !addons.ts_nobrand.active },
+          store: { ...lookOut(store), ...(THEMES.KEYS.includes(String(req.query.theme || "")) ? { theme: String(req.query.theme), preview: true } : {}), open: now.open, opens: now.next, hours: hoursOut(store, addons), promo: !!addons.ts_promos.active, brand: !addons.ts_nobrand.active, again: !!addons.ts_remind.active, zones: store.delivery?.on ? zonesOut(store, addons) : null, pin: !!(store.delivery?.on && (zonesOn(store, addons) || (addons.ts_riders.active && store.riders?.chat_id))) },
           categories: cats.map(categoryOut),
           products: products.map(productOut).map(({ hidden, sort, ...p }) => p), // eslint-disable-line no-unused-vars
           telegram: links.telegram,
@@ -1287,10 +1705,10 @@ module.exports = (prop) => {
   prop.app.get(
     pub("/:slug/me"),
     handle(async (req, res) => {
-      const { store } = await openStore(req.params.slug);
+      const { store, addons } = await openStore(req.params.slug);
       const u = who(req);
       if (!u) return res.json({ success: true, data: { telegram: false, orders: [] } });
-      const c = await M.TgCustomer.findOne({ business_id: store.business_id, tg_id: u.tg_id }).lean();
+      const [c, cart] = await Promise.all([M.TgCustomer.findOne({ business_id: store.business_id, tg_id: u.tg_id }).lean(), addons.ts_remind.active ? M.TgCart.findOne({ business_id: store.business_id, tg_id: u.tg_id }).lean() : null]);
       const orders = c
         ? await M.TgOrder.find({ business_id: store.business_id, customer_id: c._id })
             .sort({ created_date: -1 })
@@ -1305,9 +1723,68 @@ module.exports = (prop) => {
           phone: c?.phone || "",
           address: c?.address || "",
           can_message: !!(c?.can_message || u.can_message),
+          pin: c?.pin?.lat !== null && c?.pin?.lat !== undefined ? { lat: c.pin.lat, lng: c.pin.lng } : null,
           orders: orders.map((o) => ({ token: o.token, no: o.no, total: o.total, currency: o.currency, status: o.status, created_date: o.created_date, items: o.items.length })),
+          // add-on ts_remind: the cart they left (to put it back) + the last order (for "Order again")
+          cart: cart?.items?.length ? cart.items.map((l) => ({ product_id: l.product_id, qty: l.qty, options: l.options || [], note: l.note || "" })) : [],
+          last: addons.ts_remind.active && orders[0] ? { token: orders[0].token, no: orders[0].no, total: orders[0].total, created_date: orders[0].created_date, items: orders[0].items.map((l) => ({ product_id: l.product_id, name: l.name, qty: l.qty, options: (l.options || []).map((x) => ({ group: x.group, choice: x.choice })), note: l.note || "" })) } : null,
         },
       });
+    }),
+  );
+
+  // what a Telegram customer has in the cart (add-on ts_remind): kept for the reminder, cleared by the order
+  const cartLimiter = rate_limit({ windowMs: 10 * 60 * 1000, max: 120, message: MSG.slow });
+  prop.app.put(
+    pub("/:slug/cart"),
+    cartLimiter,
+    handle(async (req, res) => {
+      const { store: s, addons } = await openStore(req.params.slug);
+      const u = who(req);
+      if (!u || !addons.ts_remind.active) return res.json({ success: true, data: { saved: false } });
+      const lines = (Array.isArray(req.body?.items) ? req.body.items : []).slice(0, LIMITS.items).filter((l) => validId(l?.product_id));
+      if (!lines.length) {
+        await M.TgCart.deleteOne({ business_id: s.business_id, tg_id: u.tg_id });
+        return res.json({ success: true, data: { saved: true, n: 0 } });
+      }
+      const products = await M.TgProduct.find({ _id: { $in: lines.map((l) => l.product_id) }, business_id: s.business_id, deleted: false }).select("price").lean();
+      const price = new Map(products.map((p) => [String(p._id), p.price]));
+      const items = lines
+        .filter((l) => price.has(String(l.product_id)))
+        .map((l) => ({
+          product_id: l.product_id,
+          qty: int(l.qty, 1, LIMITS.qty, 1),
+          options: (Array.isArray(l.options) ? l.options : []).slice(0, 20).map((x) => ({ group: str(x?.group, 40), choice: str(x?.choice, 40) })),
+          note: str(l.note, 120),
+        }));
+      const total = money(
+        items.reduce((a, l) => a + price.get(String(l.product_id)) * l.qty, 0),
+        s.currency,
+      );
+      // the same cart again (they opened the store): leave its time and reminder alone
+      const same = (l) => JSON.stringify((l || []).map((x) => [String(x.product_id), x.qty, (x.options || []).map((o) => [o.group, o.choice]), x.note || ""]));
+      const was = await M.TgCart.findOne({ business_id: s.business_id, tg_id: u.tg_id }).select("items").lean();
+      if (was && same(was.items) === same(items)) return res.json({ success: true, data: { saved: true, n: items.length, same: true } });
+      await M.TgCart.findOneAndUpdate(
+        { business_id: s.business_id, tg_id: u.tg_id },
+        { $set: { name: u.name, username: u.username, items, total, at: new Date(), reminded_at: null, reminded: false, ...(u.can_message ? { can_message: true } : {}) }, $setOnInsert: { business_id: s.business_id, tg_id: u.tg_id } },
+        { upsert: true },
+      );
+      res.json({ success: true, data: { saved: true, n: items.length } });
+    }),
+  );
+
+  // the delivery fee for a place (add-on ts_zones): { pin } or { area }
+  prop.app.post(
+    pub("/:slug/fee"),
+    cartLimiter,
+    handle(async (req, res) => {
+      const { store: s, addons } = await openStore(req.params.slug);
+      if (!s.delivery.on || !zonesOn(s, addons)) throw new Bad(MSG.badMode, 400, { code: "no_zones" });
+      const pin = req.body?.pin ? pinOf(req.body.pin) : null;
+      if (req.body?.pin && !pin) throw new Bad(MSG.badPin, 400, { code: "bad_pin" });
+      const z = zoneFee(s, { area: req.body?.area, pin });
+      res.json({ success: true, data: { fee: money(z.fee, s.currency), km: z.zone.km, name: z.zone.name, min_order: z.min_order, pin } });
     }),
   );
 
@@ -1362,9 +1839,16 @@ module.exports = (prop) => {
       }
       const subtotal = money(items.reduce((a, l) => a + l.total, 0), cur);
       let fee = 0;
+      let zone = null;
+      const pin = mode === "delivery" && b.pin ? pinOf(b.pin) : null;
+      if (mode === "delivery" && b.pin && !pin) throw new Bad(MSG.badPin, 400, { code: "bad_pin" });
       if (mode === "delivery") {
         if (s.delivery.min_order && subtotal < s.delivery.min_order) throw new Bad(fill(MSG.minOrder, { amount: fmtMoney(s.delivery.min_order, cur) }), 400, { code: "min_order" });
-        fee = s.delivery.free_from && subtotal >= s.delivery.free_from ? 0 : money(s.delivery.fee || 0, cur);
+        // delivery zones (add-on ts_zones): the fee of the area / the distance
+        const z = zonesOn(s, addons) ? zoneFee(s, { area: b.area, pin }) : null;
+        if (z?.min_order && subtotal < z.min_order) throw new Bad(fill(MSG.minOrder, { amount: fmtMoney(z.min_order, cur) }), 400, { code: "min_order" });
+        zone = z ? z.zone : pin ? { name: "", km: null, ...pin } : null;
+        fee = s.delivery.free_from && subtotal >= s.delivery.free_from ? 0 : money(z ? z.fee : s.delivery.fee || 0, cur);
       }
       // a promo code (add-on ts_promos): worked out here from the real subtotal
       let promo = null;
@@ -1414,7 +1898,7 @@ module.exports = (prop) => {
 
       // who is ordering
       let customer = null;
-      const custSet = { name: name.slice(0, 80), ...(phone ? { phone } : {}), ...(mode === "delivery" ? { address } : {}) };
+      const custSet = { name: name.slice(0, 80), ...(phone ? { phone } : {}), ...(mode === "delivery" ? { address } : {}), ...(pin ? { pin } : {}) };
       if (u) {
         customer = await M.TgCustomer.findOneAndUpdate(
           { business_id: s.business_id, tg_id: u.tg_id },
@@ -1448,7 +1932,11 @@ module.exports = (prop) => {
         pay: { method, status: "unpaid", ...(own ? { custom: { id: String(own._id), name: own.name, info: own.info, image: addons.ts_pay.active ? own.image?.url || "" : "" } } : {}) },
         timeline: [{ status: "new", at: new Date(), by: name || "Customer" }],
         via: u ? "telegram" : "web",
+        ...(zone ? { zone } : {}),
       });
+      // the cart is now an order (add-on ts_remind): after a reminder, count it as won back
+      const cart = u ? await M.TgCart.findOneAndDelete({ business_id: s.business_id, tg_id: u.tg_id }).lean() : null;
+      if (cart?.reminded) o.from_remind = true;
       if (method === "khqr") {
         const expires = new Date(Date.now() + 60 * 60000);
         const k = khqr.build({ bakongId: s.pay.khqr.bakong_id, name: s.pay.khqr.account_name || s.shop_name, amount: total, currency: cur, bill: `TG${o.no}`, store: s.shop_name, expiresAt: expires });
@@ -1461,6 +1949,7 @@ module.exports = (prop) => {
         if (promo) await M.TgPromo.updateOne({ _id: promo.promo._id }, { $inc: { used: -1 } });
         throw err;
       }
+      if (o.from_remind) await M.TgStore.updateOne({ _id: s._id }, { $inc: { "remind.back": 1, "remind.back_total": total } });
       await postToGroup(s, o);
       res.status(201).json({ success: true, data: { token: o.token, no: o.no, total, currency: cur } });
     }),
@@ -1488,8 +1977,8 @@ module.exports = (prop) => {
       }
       res.set("Cache-Control", "no-store");
       const kq = o.pay.method === "khqr" && o.pay.status !== "paid" ? { qr: o.pay.khqr?.qr || "", amount: o.pay.khqr?.amount || o.total, expires: o.pay.khqr?.expires || null, name: s.pay.khqr.account_name || s.shop_name, auto: khqr.configured() } : null;
-      const brand = !(await addonsOf(o.business_id)).ts_nobrand.active;
-      res.json({ success: true, data: { order: orderOut(o), khqr: kq, store: { ...lookOut(s), brand } } });
+      const addons = await addonsOf(o.business_id);
+      res.json({ success: true, data: { order: orderOut(o), khqr: kq, store: { ...lookOut(s), brand: !addons.ts_nobrand.active, again: !!addons.ts_remind.active } } });
     }),
   );
   prop.app.post(
@@ -1511,4 +2000,4 @@ module.exports = (prop) => {
   );
 };
 
-Object.assign(module.exports, { tgUser, licenseState, groupText });
+Object.assign(module.exports, { tgUser, licenseState, groupText, riderText, tick, pinOf, kmBetween });

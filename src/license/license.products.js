@@ -15,6 +15,9 @@ const PRODUCTS = {
   ts_history: { price_key: "ts_history", days: null, category: "tg_store", service: "ts_history" }, // see every order, not only the last 60 days, forever
   ts_pay: { price_key: "ts_pay", days: null, category: "tg_store", service: "ts_pay" }, // more ways to pay + a picture / QR for each, forever
   ts_link: { price_key: "ts_link", days: null, category: "tg_store", service: "ts_link" }, // own store link name + QR colours and logo, forever
+  ts_remind: { price_key: "ts_remind", days: 365, category: "tg_store", service: "ts_remind" }, // cart reminder in Telegram + "Order again", yearly
+  ts_zones: { price_key: "ts_zones", days: 365, category: "tg_store", service: "ts_zones" }, // delivery fee by area or by distance (location pin), yearly
+  ts_riders: { price_key: "ts_riders", days: 365, category: "tg_store", service: "ts_riders" }, // riders' Telegram group: Take it · Picked up · Delivered, yearly
   ts_theme: { price_key: "ts_theme", days: null, category: "tg_store", service: "ts_theme", item: true }, // one store design, forever
   // Team access (v1.5): other BizHub accounts open this business as Admin / View only. Any business type, yearly.
   team: { price_key: "team_year", days: 365, category: "*", service: "team" },

@@ -861,6 +861,10 @@ module.exports = (prop, kit) => {
       const note = await require("../note/note.telegram")
         .tick()
         .catch(() => ({}));
+      // Telegram Store: cart reminders (add-on)
+      const tgstore = await require("../tgstore/tgstore.route")
+        .tick()
+        .catch((err) => ({ error: err?.message || String(err) }));
       // "Delete my account": erase the accounts whose 30 days have passed (a few per run)
       const accounts = await require("../../user/account_delete")
         .purgeDueAccounts()
@@ -869,7 +873,7 @@ module.exports = (prop, kit) => {
       const googlePlay = await require("../../coin/google.route")
         .syncVoided()
         .catch((err) => ({ error: err?.message || String(err) }));
-      res.json({ success: true, checked: list.length, sent, attendance: att, guesthouse: gh, mart, ical, qr, debt, stamp, event, note, accounts, googlePlay });
+      res.json({ success: true, checked: list.length, sent, attendance: att, guesthouse: gh, mart, ical, qr, debt, stamp, event, note, tgstore, accounts, googlePlay });
     } catch (err) {
       console.error("[daily-report]", err);
       res.status(500).json({ success: false });

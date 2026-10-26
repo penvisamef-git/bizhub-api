@@ -169,6 +169,9 @@ const DEFAULT_HOMEPAGE = {
     ts_history: 45, // every order, not only the last 60 days, forever
     ts_pay: 10, // more ways to pay + picture / QR, forever
     ts_link: 20, // own link name + QR style, forever
+    ts_remind: 20, // cart reminder + order again, per year
+    ts_zones: 20, // delivery zones, per year
+    ts_riders: 30, // riders group, per year
     ts_theme: 15, // one store design, forever
     fb_book_slot: 1, // v1.5.5: 5 more books = 5 coins (was 5 each)
     fb_big_slot: 10,
