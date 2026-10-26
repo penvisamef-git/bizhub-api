@@ -12,6 +12,7 @@
     "migrate:restaurant-yearly": "node scripts/migrate-restaurant-yearly.js",
     "telegram:webhook": "node scripts/telegram-webhook.js",
     "migrate:phone-login": "node scripts/migrate-phone-login.js",
+    "migrate:prices-155": "node scripts/migrate-prices-155.js",
     "dev:8888": "api_port=8888 nodemon",
     "deploy:uat": "node scripts/deploy.js uat",
     "deploy:prod": "node scripts/deploy.js prod",

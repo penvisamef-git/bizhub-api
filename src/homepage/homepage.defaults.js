@@ -160,7 +160,7 @@ const DEFAULT_HOMEPAGE = {
     ev_questions: 30,
     ev_autopay: 60,
     ev_certs: 40,
-    fb_book_slot: 5,
+    fb_book_slot: 1, // v1.5.5: 5 more books = 5 coins (was 5 each)
     fb_big_slot: 10,
     fb_categories: 100,
     fb_stats: 20,
@@ -170,7 +170,7 @@ const DEFAULT_HOMEPAGE = {
     fb_qr_styles: 35,
     fb_shelf_live: 25,
     fb_leads: 30,
-    fb_links: 60,
+    fb_links: 25, // v1.5.5 (was 60)
     mart: 150,
     mart_staff: 45,
     mart_payments: 55,
