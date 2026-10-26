@@ -125,6 +125,8 @@ async function eraseAccount(id) {
     done.businesses += 1;
     done.files += r.deleted || 0;
   }
+  // 1b) out of other owners' teams
+  if (mongoose.models.TeamMember) await mongoose.models.TeamMember.deleteMany({ customer_id: cid });
   // 2) "Chat with BizHub" + its files; coin-order screenshots (the orders stay: money records)
   const P = require("../platform/platform.model");
   const files = new Map();

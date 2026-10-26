@@ -79,6 +79,9 @@ publicAPI_V1(prop);
 // /src/telegram     BizHub Telegram bot (connect chat, send messages)
 // /src/login_qr     log in to the app with a QR code from the website (Account page)
 // /src/biz_category (later)
+// Team access (v1.5): finds the caller's role in /api/user/businesses/:id/… (owner | admin | view) before any service runs
+app.use("/api/user/businesses/:id", require("./src/biz/team/team.access").gate);
+
 require("./src/homepage")(prop);
 require("./src/user")(prop);
 require("./src/biz")(prop);

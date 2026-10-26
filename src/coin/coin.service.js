@@ -16,6 +16,7 @@ const MSG = {
   notEnough: "កាក់មិនគ្រប់គ្រាន់!",
   sameWallet: "មិនអាចផ្ទេរទៅកាបូបតែមួយបានទេ!",
   walletNotFound: "រកមិនឃើញកាបូប!",
+  ownerOnly: "មានតែម្ចាស់អាជីវកម្មទេដែលអាចទិញបាន។ / Only the business owner can buy this.",
 };
 
 function checkAmount(amount) {
@@ -75,6 +76,11 @@ async function transfer({ from, to, amount, note, payment, userId, customerId = 
   const n = Number(amount);
   if (!Number.isInteger(n) || n < 1 || n > max) throw new CoinError(MSG.badAmount);
   if (String(from._id) === String(to._id)) throw new CoinError(MSG.sameWallet);
+  // spending for a business: only its owner pays (team members can't spend coins on someone else's business)
+  if (type === "spend" && businessId && customerId) {
+    const biz = await require("mongoose").model("Business").findById(businessId).select("owner_id").lean();
+    if (biz && String(biz.owner_id) !== String(customerId)) throw new CoinError(MSG.ownerOnly, 403);
+  }
 
   const debited = await Wallet.findOneAndUpdate({ _id: from._id, balance: { $gte: n } }, { $inc: { balance: -n } }, { returnDocument: "after" });
   if (!debited) throw new CoinError(MSG.notEnough);

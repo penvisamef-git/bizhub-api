@@ -45,6 +45,7 @@ const mongoose = require("mongoose");
 const multer = require("multer");
 const bcrypt = require("bcrypt");
 const Business = require("../business.model");
+const { bizOwner, roleIn } = require("../team/team.access"); // team members (Admin / View only) open it too
 const { customer_auth } = require("../../user/customer_auth");
 const { priceOf } = require("../../homepage/prices");
 const { buy, LicenseError } = require("../../license/license.service");
@@ -95,7 +96,7 @@ module.exports = (prop) => {
   // write: "content" = new / changed notes, files, replies (refused when read-only); true = any other change
   async function ctxOf(req, write) {
     if (!S.validId(req.params.id)) throw new Bad(MSG.badId);
-    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, owner_id: req.customer._id, deleted: false }), S.licenseState(req.params.id)]);
+    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }), S.licenseState(req.params.id)]);
     if (!business) throw new Bad(MSG.notFound, 404);
     if (business.category !== "digital_note") throw new Bad(MSG.notNote);
     if (write && !business.status) throw new Bad(MSG.suspended, 403);

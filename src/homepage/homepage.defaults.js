@@ -62,6 +62,7 @@ const DEFAULT_HOMEPAGE = {
     att_website: 95,
     att_web_theme: 35,
     att_holidays: 45,
+    team_year: 5, // Team access for one business (Admin / View only members), yearly
     att_roster: 60,
     att_khpay: 80,
     att_manager: 40,

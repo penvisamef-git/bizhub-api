@@ -249,6 +249,7 @@ const homepageSchema = new mongoose.Schema(
       gh_branches: { type: Number, default: d.prices.gh_branches, min: 0 }, // several guest houses, yearly
       att_roster: { type: Number, default: d.prices.att_roster, min: 0 }, // weekly roster, yearly
       att_holidays: { type: Number, default: d.prices.att_holidays, min: 0 }, // one year of Cambodia public holidays
+      team_year: { type: Number, default: d.prices.team_year, min: 0 }, // Team access for one business, yearly
     },
 
     payment_methods: { type: [String], default: () => [...d.payment_methods] },

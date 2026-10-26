@@ -21,6 +21,7 @@ const Portfolio = require("./portfolio.model");
 const { licensesOf } = require("../../license/license.service");
 const { PRODUCTS } = require("../../license/license.products");
 const Business = require("../business.model");
+const { bizOwner, roleIn } = require("../team/team.access"); // team members (Admin / View only) open it too
 const Customer = require("../../user/customer.model");
 const { customer_auth } = require("../../user/customer_auth");
 const { uploadBuffer, deleteFile } = require("../../util/cloudinary");
@@ -103,7 +104,7 @@ const route = (prop) => {
       res.status(400).json({ success: false, message: MSG.badId });
       return null;
     }
-    const business = await Business.findOne({ _id: req.params.id, owner_id: req.customer._id, deleted: false });
+    const business = await Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false });
     if (!business) {
       res.status(404).json({ success: false, message: MSG.notFound });
       return null;

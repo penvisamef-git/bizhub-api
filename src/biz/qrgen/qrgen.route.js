@@ -24,6 +24,7 @@ const { UAParser } = require("ua-parser-js");
 const M = require("./qrgen.models");
 const { DESIGNS, TEMPLATES, THEMES, PRINTS } = require("./qrgen.designs");
 const Business = require("../business.model");
+const { bizOwner, roleIn } = require("../team/team.access"); // team members (Admin / View only) open it too
 const Customer = require("../../user/customer.model");
 const License = require("../../license/license.model");
 const coin = require("../../coin/coin.service");
@@ -204,7 +205,7 @@ module.exports = (prop) => {
   const guard = [prop.api_auth, customer_auth];
   async function ctxOf(req, write) {
     if (!validId(req.params.id)) throw new Bad(MSG.badId);
-    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, owner_id: req.customer._id, deleted: false }), licenseState(req.params.id)]);
+    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }), licenseState(req.params.id)]);
     if (!business) throw new Bad(MSG.notFound, 404);
     if (business.category !== "qr_gen") throw new Bad(MSG.notQr);
     if (write && !business.status) throw new Bad(MSG.suspended, 403);

@@ -52,7 +52,9 @@ async function buy({ customer, business, product, item = "", expect }) {
   const def = PRODUCTS[product];
   if (!def || def.retired) throw new LicenseError("Unknown product", 400);
   if (def.soon) throw new LicenseError("soon", 400);
-  if (def.category !== business.category) throw new LicenseError("Not for this business type", 400);
+  if (def.category !== "*" && def.category !== business.category) throw new LicenseError("Not for this business type", 400);
+  // only the owner pays for a business (a team Admin can't spend their own or the owner's coins on it)
+  if (business.owner_id && String(business.owner_id) !== String(customer._id)) throw new LicenseError("មានតែម្ចាស់អាជីវកម្មទេដែលអាចទិញបាន។ / Only the business owner can buy this.", 403, { code: "owner_only" });
   // some add-ons sit on top of another one (customer accounts need the website)
   if (def.needs) {
     const base = await License.findOne({ business_id: business._id, product: def.needs, item: "" });

@@ -18,6 +18,7 @@ const { uploadBuffer, deleteFile, cloudinary } = require("../../util/cloudinary"
 const coin = require("../../coin/coin.service");
 const Namecard = require("./namecard.model");
 const Business = require("../business.model");
+const { bizOwner, roleIn } = require("../team/team.access"); // team members (Admin / View only) open it too
 const Customer = require("../../user/customer.model");
 const { customer_auth } = require("../../user/customer_auth");
 const { licensesOf } = require("../../license/license.service");
@@ -128,7 +129,7 @@ const route = (prop) => {
 
   async function ownBusiness(req, res, forEdit) {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return void res.status(400).json({ success: false, message: MSG.badId });
-    const business = await Business.findOne({ _id: req.params.id, owner_id: req.customer._id, deleted: false });
+    const business = await Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false });
     if (!business) return void res.status(404).json({ success: false, message: MSG.notFound });
     if (business.category !== "namecard") return void res.status(400).json({ success: false, message: MSG.notNamecard });
     if (forEdit && !business.status) return void res.status(403).json({ success: false, message: MSG.suspended });

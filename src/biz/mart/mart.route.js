@@ -14,6 +14,7 @@ const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const M = require("./mart.models");
 const Business = require("../business.model");
+const { bizOwner, roleIn } = require("../team/team.access"); // team members (Admin / View only) open it too
 const License = require("../../license/license.model");
 const { statusOf, LicenseError, DAY } = require("../../license/license.service");
 const { priceOf } = require("../../homepage/prices");
@@ -164,7 +165,7 @@ module.exports = (prop) => {
 
   async function ctxOf(req, write) {
     if (!validId(req.params.id)) throw new Bad(MSG.badId);
-    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, owner_id: req.customer._id, deleted: false }), licenseState(req.params.id)]);
+    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }), licenseState(req.params.id)]);
     if (!business) throw new Bad(MSG.notFound, 404);
     if (business.category !== "mart") throw new Bad(MSG.notMart);
     if (write) {
@@ -172,7 +173,7 @@ module.exports = (prop) => {
       if (state.license.locked) throw new Bad(MSG.locked, 402, { product: "mart" });
     }
     const settings = await settingsOf(business._id);
-    return { business, settings, ...state, role: "owner", by: req.customer?.name || "owner" };
+    return { business, settings, ...state, role: roleIn(req, business), by: req.customer?.name || "owner" };
   }
   const handle = (fn) => async (req, res) => {
     try {

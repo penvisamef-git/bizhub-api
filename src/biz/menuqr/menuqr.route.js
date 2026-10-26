@@ -21,6 +21,7 @@ const multer = require("multer");
 const M = require("./menuqr.models");
 const { THEMES, THEME_PRODUCT, QR_STYLES, FREE_THEME, FREE_QR } = require("./menuqr.themes");
 const Business = require("../business.model");
+const { bizOwner, roleIn } = require("../team/team.access"); // team members (Admin / View only) open it too
 const Customer = require("../../user/customer.model");
 const License = require("../../license/license.model");
 const { statusOf, buy, LicenseError, DAY } = require("../../license/license.service");
@@ -211,7 +212,7 @@ module.exports = (prop) => {
 
   async function ctxOf(req, write) {
     if (!validId(req.params.id)) throw new Bad(MSG.badId);
-    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, owner_id: req.customer._id, deleted: false }), licenseState(req.params.id)]);
+    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }), licenseState(req.params.id)]);
     if (!business) throw new Bad(MSG.notFound, 404);
     if (business.category !== "menu_qr") throw new Bad(MSG.notMenu);
     if (write) {

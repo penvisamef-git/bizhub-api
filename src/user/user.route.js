@@ -76,6 +76,7 @@ function loginData(customer, wallet, token) {
     coin_balance: wallet ? wallet.balance : 0,
     created_date: customer.created_date,
     photo: customer.photo?.url || "",
+    bizhub_id: customer.bizhub_id || "", // for Team access (made the first time it's needed: GET /api/user/team/my-id)
     delete_at: customer.delete_at || null, // "Delete my account" is pending until this date
     ...(token ? { access_token: token } : {}),
   };

@@ -16,6 +16,7 @@
 const mongoose = require("mongoose");
 const M = require("./guesthouse.models");
 const Business = require("../business.model");
+const { bizOwner, roleIn } = require("../team/team.access"); // team members (Admin / View only) open it too
 const License = require("../../license/license.model");
 const { statusOf, LicenseError, DAY } = require("../../license/license.service");
 const { priceOf } = require("../../homepage/prices");
@@ -175,7 +176,7 @@ module.exports = (prop) => {
 
   async function ctxOf(req, write) {
     if (!validId(req.params.id)) throw new Bad(MSG.badId);
-    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, owner_id: req.customer._id, deleted: false }), licenseState(req.params.id)]);
+    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }), licenseState(req.params.id)]);
     if (!business) throw new Bad(MSG.notFound, 404);
     if (business.category !== "guest_house") throw new Bad(MSG.notGh);
     if (write) {

@@ -29,6 +29,7 @@ const crypto = require("crypto");
 const multer = require("multer");
 const M = require("./event.models");
 const Business = require("../business.model");
+const { bizOwner, roleIn } = require("../team/team.access"); // team members (Admin / View only) open it too
 const Customer = require("../../user/customer.model");
 const License = require("../../license/license.model");
 const { statusOf, buy, LicenseError, DAY } = require("../../license/license.service");
@@ -535,7 +536,7 @@ module.exports = (prop) => {
   // ======================================== the owner ========================================
   async function ownerCtx(req, write) {
     if (!validId(req.params.id)) throw new Bad(MSG.badId);
-    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, owner_id: req.customer._id, deleted: false }), licenseState(req.params.id)]);
+    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }), licenseState(req.params.id)]);
     if (!business) throw new Bad(MSG.notFound, 404);
     if (business.category !== PRODUCT) throw new Bad(MSG.notEvent);
     if (write) {

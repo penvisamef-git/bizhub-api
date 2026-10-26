@@ -27,6 +27,7 @@ const mongoose = require("mongoose");
 const M = require("./attendance.models");
 const C = require("./attendance.calc");
 const Business = require("../business.model");
+const { bizOwner, roleIn } = require("../team/team.access"); // team members (Admin / View only) open it too
 const License = require("../../license/license.model");
 const { holidayMap } = require("./attendance.days");
 const { planOf, shiftNow, workDaysIn } = require("./attendance.plan");
@@ -299,7 +300,7 @@ module.exports = (prop) => {
 
   async function ctxOf(req, write) {
     if (!validId(req.params.id)) throw new Bad(MSG.badId);
-    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, owner_id: req.customer._id, deleted: false }), licenseState(req.params.id)]);
+    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }), licenseState(req.params.id)]);
     if (!business) throw new Bad(MSG.notFound, 404);
     if (business.category !== "attendance") throw new Bad(MSG.notAttendance);
     if (write) {

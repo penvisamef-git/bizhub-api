@@ -30,6 +30,9 @@ const customerSchema = new mongoose.Schema(
     delete_at: { type: Date, default: null },
     deleted_at: { type: Date, default: null },
 
+    // "BH-482917": the public ID others use to add this person to a business team (made the first time it's needed)
+    bizhub_id: { type: String, trim: true, maxlength: 12 },
+
     last_login_date: { type: Date, default: null },
     signup_device: Object,
   },
@@ -43,6 +46,7 @@ const customerSchema = new mongoose.Schema(
 customerSchema.index({ email: 1 }, { unique: true, name: "email_unique", partialFilterExpression: { email: { $type: "string" } } });
 customerSchema.index({ phone: 1 }, { unique: true, name: "phone_verified_unique", partialFilterExpression: { phone_verified: true } });
 customerSchema.index({ created_date: -1 });
+customerSchema.index({ bizhub_id: 1 }, { unique: true, name: "bizhub_id_unique", partialFilterExpression: { bizhub_id: { $type: "string" } } });
 customerSchema.index({ delete_at: 1 }, { partialFilterExpression: { delete_at: { $type: "date" } } }); // the daily erase
 // login by email: the unique index above only covers rows where email is text, and a lookup by email can't use it
 customerSchema.index({ email: 1 }, { name: "email_lookup" });

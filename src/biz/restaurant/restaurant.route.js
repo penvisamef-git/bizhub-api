@@ -20,6 +20,7 @@ const mongoose = require("mongoose");
 const multer = require("multer");
 const M = require("./restaurant.models");
 const Business = require("../business.model");
+const { bizOwner, roleIn } = require("../team/team.access"); // team members (Admin / View only) open it too
 const Customer = require("../../user/customer.model");
 const License = require("../../license/license.model");
 const { statusOf, DAY } = require("../../license/license.service");
@@ -437,7 +438,7 @@ const route = (prop) => {
   async function ctxOf(req, write) {
     if (!validId(req.params.id)) throw new Bad(MSG.badId);
     // both reads at once (one round trip to the database instead of two)
-    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, owner_id: req.customer._id, deleted: false }), licenseState(req.params.id)]);
+    const [business, state] = await Promise.all([Business.findOne({ _id: req.params.id, ...bizOwner(req), deleted: false }), licenseState(req.params.id)]);
     if (!business) throw new Bad(MSG.notFound, 404);
     if (business.category !== "restaurant") throw new Bad(MSG.notRestaurant);
     if (write) {
