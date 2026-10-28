@@ -362,3 +362,13 @@ module.exports = (prop) => {
 };
 // adding / changing a business should show at once
 module.exports.forget = (ownerId) => cache.delete(String(ownerId));
+// the same answer for Bizi's brief (src/biz/bizi.route.js), from the same 30 s cache
+module.exports.dashboardOf = async (ownerId) => {
+  const key = String(ownerId);
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.data;
+  const data = await build(ownerId);
+  if (cache.size > 5000) cache.clear();
+  cache.set(key, { at: Date.now(), data });
+  return data;
+};

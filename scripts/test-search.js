@@ -171,6 +171,23 @@ const ok = (c, m, extra) => {
     r = await find("custmers");
     ok(r.j.data.results.length === 0 || r.j.data.fuzzy, "(no crash on a typo with nothing near)");
 
+    console.log("\nBizi brief (layer 1)");
+    const br = async (u = O) => {
+      const x = await fetch(`${base}/api/user/bizi/brief`, { headers: { "x-api-key": "k", authorization: `Bearer ${u.tok}` } });
+      return { s: x.status, j: await x.json().catch(() => ({})) };
+    };
+    let b = await br();
+    const keys = (b.j.data?.alerts || []).map((a) => `${a.key}:${a.n}`);
+    ok(b.s === 200 && keys.includes("tg_new:1") && keys.includes("staying") === false, "a new Telegram order waits", keys);
+    ok(keys.includes("ev_review:0") === false && b.j.data.summary.orders_today === 1 && b.j.data.summary.today >= 6.5, "today's Telegram order counts in the summary", b.j.data.summary);
+    await TS.TgOrder.collection.updateOne({ no: 12 }, { $set: { created_date: new Date(Date.now() - 20 * 60e3) } });
+    await GH.GhStay.collection.updateOne({ no: "B-0003" }, { $set: { to: new Date(Date.now() - 2 * 864e5) } });
+    b = await br();
+    const tg = b.j.data.alerts.find((a) => a.key === "tg_new");
+    ok(tg.level === "warn" && b.j.data.mood === "worried" && b.j.data.alerts[0].level === "warn", "waiting 20 min → warn, Bizi worried, warnings first", b.j.data.alerts);
+    ok(b.j.data.alerts.some((a) => a.key === "checkout_late" && a.tab === "today" && String(a.business_id) === String(gh._id)), "a guest past check-out → the guest house's Today", b.j.data.alerts);
+    ok((await br(X)).j.data.alerts.length === 0, "a stranger's brief is empty");
+
     console.log("\nteam members");
     r = await find("coffee", A);
     ok(r.s === 200 && r.j.data.results.length === 0, "not in a team yet → nothing", titles(r));

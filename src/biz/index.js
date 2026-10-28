@@ -21,5 +21,6 @@ module.exports = (prop) => {
   require("./tgstore")(prop); // Telegram Store (v2.0): shop inside Telegram, orders to the shop's group, KHQR / cash
   require("./team/team.route")(prop); // Team access (v1.5): Admin / View only members, invite by BizHub ID or link
   require("./search.route")(prop); // Bizi search (v3.0.0): one box for everything in all my businesses (own + team-shared)
+  require("./bizi.route")(prop); // Bizi brief (v3.0.0): summary + what needs the owner now (no AI)
   require("./pos_demo")(prop); // "Try demo" in the BizHub POS app: a sample restaurant / mini mart / guest house
 };
