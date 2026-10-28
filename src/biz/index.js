@@ -20,5 +20,6 @@ module.exports = (prop) => {
   require("./note")(prop); // Digital Note: shared notes (view / add below / edit / collect), files, seen by, history
   require("./tgstore")(prop); // Telegram Store (v2.0): shop inside Telegram, orders to the shop's group, KHQR / cash
   require("./team/team.route")(prop); // Team access (v1.5): Admin / View only members, invite by BizHub ID or link
+  require("./search.route")(prop); // Bizi search (v3.0.0): one box for everything in all my businesses (own + team-shared)
   require("./pos_demo")(prop); // "Try demo" in the BizHub POS app: a sample restaurant / mini mart / guest house
 };
