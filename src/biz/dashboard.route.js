@@ -2,10 +2,10 @@
 //   GET /api/user/dashboard[?fresh=1]
 //     coins       { balance, wallet, spent_30d }
 //     businesses  same rows as GET /api/user/businesses (photo / logo, license…)
-//     sales       restaurants + guest houses (money received) — today, yesterday, this week (Mon→today) vs the same days last week,
+//     sales       restaurants + guest houses (money received) + mini marts + Telegram Store (orders not cancelled) — today, yesterday, this week (Mon→today) vs the same days last week,
 //                 this month, bills, average bill, open bills now, last 14 days; totals in one currency
 //                 (USD, or riel when every restaurant uses riel) + each restaurant in its own currency
-//     top_items   best sellers this week across every business that sells (restaurants + mini marts), each with its business type
+//     top_items   best sellers this week across every business that sells (restaurants, mini marts, Telegram Store), each with its business type
 //     now         right now across all businesses: online orders / bookings waiting, guests in house, open bills,
 //                 staff at work today, new messages, low / sold-out stock, renewals within 14 days, new customers this week
 //     attention   (older screens) years / add-ons ending within 14 days or ended, low stock and sold out items
@@ -87,7 +87,26 @@ async function build(ownerId) {
     const st = martSettings.find((x) => String(x.business_id) === String(b._id));
     money.set(String(b._id), { currency: st?.currency || "USD", khr_rate: st?.khr_rate || 4100 });
   }
-  const sellers = [...rests, ...ghs, ...marts];
+  // Telegram Store: every order not cancelled counts (by the day it was placed), in the store's currency
+  const TS = require("./tgstore/tgstore.models");
+  const tss = businesses.filter((b) => b.category === "tg_store");
+  const tsIds = tss.map((b) => b._id);
+  const [tsStores, tsByDay] = tsIds.length
+    ? await Promise.all([
+        TS.TgStore.find({ business_id: { $in: tsIds } })
+          .select("business_id currency")
+          .lean(),
+        TS.TgOrder.aggregate([
+          { $match: { business_id: { $in: tsIds }, status: { $ne: "cancelled" }, created_date: { $gte: dayStart(from) } } },
+          { $group: { _id: { b: "$business_id", d: { $dateToString: { format: "%Y-%m-%d", date: "$created_date", timezone: "+07:00" } } }, sales: { $sum: "$total" }, bills: { $sum: 1 } } },
+        ]),
+      ])
+    : [[], []];
+  for (const b of tss) {
+    const st = tsStores.find((x) => String(x.business_id) === String(b._id));
+    money.set(String(b._id), { currency: st?.currency || "USD", khr_rate: 4100 });
+  }
+  const sellers = [...rests, ...ghs, ...marts, ...tss];
   const ids = rests.map((b) => b._id);
   const allIds = businesses.map((b) => b._id);
   const soon = new Date(now.getTime() + 14 * DAY);
@@ -143,7 +162,8 @@ async function build(ownerId) {
   const per = sellers.map((b) => {
     const gh = b.category === "guest_house";
     const mart = b.category === "mart";
-    const rows = (gh ? ghByDay : mart ? martByDay : byDay).filter((r) => String(r._id.b) === String(b._id));
+    const tg = b.category === "tg_store";
+    const rows = (gh ? ghByDay : mart ? martByDay : tg ? tsByDay : byDay).filter((r) => String(r._id.b) === String(b._id));
     const c = money.get(String(b._id)).currency;
     const t = sum(rows, today, today);
     const y = sum(rows, addDays(today, -1), addDays(today, -1));
@@ -153,7 +173,7 @@ async function build(ownerId) {
     return {
       id: b._id,
       name: b.name,
-      kind: gh ? "guest_house" : mart ? "mart" : "restaurant",
+      kind: gh ? "guest_house" : mart ? "mart" : tg ? "tg_store" : "restaurant",
       currency: c,
       today: round(t.sales, c),
       bills_today: t.bills,
@@ -162,7 +182,7 @@ async function build(ownerId) {
       bills_week: w.bills,
       last_week: round(lw.sales, c),
       month: round(m.sales, c),
-      open_now: (gh ? ghIn : openNow).find((o) => String(o._id) === String(b._id))?.n || 0,
+      open_now: tg ? 0 : (gh ? ghIn : openNow).find((o) => String(o._id) === String(b._id))?.n || 0,
       days: days14.map((d) => round(rows.find((r) => r._id.d === d)?.sales || 0, c)),
       _raw: { t, y, w, lw, m, rows },
     };
@@ -224,6 +244,15 @@ async function build(ownerId) {
         { $limit: 40 },
       ])
     : [];
+  const tsTop = tsIds.length
+    ? await TS.TgOrder.aggregate([
+        { $match: { business_id: { $in: tsIds }, status: { $ne: "cancelled" }, created_date: { $gte: dayStart(weekStart) } } },
+        { $unwind: "$items" },
+        { $group: { _id: { b: "$business_id", i: { $ifNull: ["$items.product_id", "$items.name"] } }, name: { $first: "$items.name" }, qty: { $sum: "$items.qty" }, value: { $sum: "$items.total" } } },
+        { $sort: { qty: -1 } },
+        { $limit: 40 },
+      ])
+    : [];
   const top_items = [
     ...top.map((x) => {
       const b = rests.find((r) => String(r._id) === String(x._id.b));
@@ -232,6 +261,10 @@ async function build(ownerId) {
     ...martTop.map((x) => {
       const b = marts.find((r) => String(r._id) === String(x._id.b));
       return { name_en: x.name, name_km: x.name, qty: Math.round(x.qty * 1000) / 1000, value: round(toMain(x.value, b), main), business: b?.name || "", business_id: b?._id || null, kind: "mart" };
+    }),
+    ...tsTop.map((x) => {
+      const b = tss.find((r) => String(r._id) === String(x._id.b));
+      return { name_en: x.name, name_km: x.name, qty: x.qty, value: round(toMain(x.value, b), main), business: b?.name || "", business_id: b?._id || null, kind: "tg_store" };
     }),
   ]
     .sort((a, b) => b.qty - a.qty || b.value - a.value)
@@ -252,12 +285,13 @@ async function build(ownerId) {
     if (s.out) attention.push({ kind: "sold_out", n: s.out, business_id: b._id, business: b.name });
     if (s.low) attention.push({ kind: "low_stock", n: s.low, business_id: b._id, business: b.name });
   }
-  const now_ = await rightNow({ businesses, rests, ghs, marts, ending, stock, now, weekStart });
+  const now_ = await rightNow({ businesses, rests, ghs, marts, tss, ending, stock, now, weekStart });
   return { at: now, coins, businesses, sales, top_items, attention, now: now_ };
 }
 
 // "right now" across all the owner's businesses: what is waiting, who is here, what runs out
-async function rightNow({ businesses, rests, ghs, marts, ending, stock, now, weekStart }) {
+async function rightNow({ businesses, rests, ghs, marts, tss = [], ending, stock, now, weekStart }) {
+  const TS = require("./tgstore/tgstore.models");
   const G = require("./guesthouse/guesthouse.models");
   const MM = require("./mart/mart.models");
   const A = require("./attendance/attendance.models");
@@ -269,7 +303,7 @@ async function rightNow({ businesses, rests, ghs, marts, ending, stock, now, wee
   const by = (rows) => new Map(rows.map((r) => [String(r._id), r.n]));
   const grp = (Model, match) => Model.aggregate([{ $match: match }, { $group: { _id: "$business_id", n: { $sum: 1 } } }]);
   const none = Promise.resolve([]);
-  const [martNew, ghReq, ghSite, ghIn, restOpen, staffAll, staffIn, martMsg, martStock, martCust, ghCust] = await Promise.all([
+  const [martNew, ghReq, ghSite, ghIn, restOpen, staffAll, staffIn, martMsg, martStock, martCust, ghCust, tsNew, tsStock] = await Promise.all([
     marts.length ? grp(MM.MartOrder, { business_id: { $in: ids(marts) }, status: "new" }) : none,
     ghs.length ? grp(G.GhCustBooking, { business_id: { $in: ids(ghs) }, status: "pending" }) : none,
     ghs.length ? grp(G.GhSiteRequest, { business_id: { $in: ids(ghs) }, status: "new" }) : none,
@@ -286,6 +320,9 @@ async function rightNow({ businesses, rests, ghs, marts, ending, stock, now, wee
       : none,
     marts.length ? grp(MM.MartCustomer, { business_id: { $in: ids(marts) }, created_date: { $gte: weekFrom } }) : none,
     ghs.length ? grp(G.GhCustomer, { business_id: { $in: ids(ghs) }, created_date: { $gte: weekFrom } }) : none,
+    tss.length ? grp(TS.TgOrder, { business_id: { $in: ids(tss) }, status: "new" }) : none,
+    // Telegram Store products have no stock count, only "sold out"
+    tss.length ? TS.TgProduct.aggregate([{ $match: { business_id: { $in: ids(tss) }, deleted: false, sold_out: true } }, { $group: { _id: "$business_id", out: { $sum: 1 }, low: { $sum: 0 } } }]) : none,
   ]);
   // a tile = a number + the businesses it comes from (the biggest first), so the owner can open the right one
   const tile = (key, maps, list, tab) => {
@@ -296,9 +333,9 @@ async function rightNow({ businesses, rests, ghs, marts, ending, stock, now, wee
     return { key, n: rows.reduce((a, x) => a + x.n, 0), tab, by: rows.slice(0, 4) };
   };
   const stockMap = (rows, k) => new Map(rows.map((r) => [String(r._id), r[k]]));
-  const allStock = [...stock, ...martStock];
+  const allStock = [...stock, ...martStock, ...tsStock];
   const tiles = [];
-  if (marts.length || ghs.length) tiles.push(tile("waiting", [by(martNew), by(ghReq), by(ghSite)], [...marts, ...ghs], { mart: "orders", guest_house: "customers" }));
+  if (marts.length || ghs.length || tss.length) tiles.push(tile("waiting", [by(martNew), by(ghReq), by(ghSite), by(tsNew)], [...marts, ...ghs, ...tss], { mart: "orders", guest_house: "customers", tg_store: "orders" }));
   if (ghs.length) tiles.push(tile("in_house", [by(ghIn)], ghs, { guest_house: "" }));
   if (rests.length) tiles.push(tile("open_bills", [by(restOpen)], rests, { restaurant: "" }));
   if (atts.length) {
@@ -325,8 +362,8 @@ async function rightNow({ businesses, rests, ghs, marts, ending, stock, now, wee
     tiles.push(t);
   }
   if (marts.length) tiles.push(tile("messages", [by(martMsg)], marts, { mart: "website" }));
-  if (rests.length || marts.length) {
-    const t = tile("stock", [stockMap(allStock, "out"), stockMap(allStock, "low")], [...rests, ...marts], { restaurant: "stock", mart: "stock" });
+  if (rests.length || marts.length || tss.length) {
+    const t = tile("stock", [stockMap(allStock, "out"), stockMap(allStock, "low")], [...rests, ...marts, ...tss], { restaurant: "stock", mart: "stock", tg_store: "products" });
     t.out = allStock.reduce((a, r) => a + r.out, 0);
     t.low = allStock.reduce((a, r) => a + r.low, 0);
     tiles.push(t);

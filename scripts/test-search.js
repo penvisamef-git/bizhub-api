@@ -76,7 +76,7 @@ const ok = (c, m, extra) => {
     await put(TS.TgProduct, { business_id: coffee._id, name: "Old latte", price: 2, deleted: true });
     await put(TS.TgProduct, { business_id: gone._id, name: "Gone coffee", price: 1, deleted: false });
     await put(TS.TgProduct, { business_id: other._id, name: "Stranger coffee", price: 1, deleted: false });
-    await put(TS.TgOrder, { business_id: coffee._id, no: 12, customer: { name: "Emma Wilson", phone: "012555402" }, status: "new", total: 6.5, currency: "USD" });
+    await put(TS.TgOrder, { business_id: coffee._id, no: 12, customer: { name: "Emma Wilson", phone: "012555402" }, status: "new", items: [{ name: "Khmer iced coffee", qty: 2, price: 3.25, total: 6.5 }], total: 6.5, currency: "USD" });
     await put(TS.TgCustomer, { business_id: coffee._id, name: "Emma Wilson", phone: "012555402", username: "emmaw" });
     await put(MA.MartProduct, { business_id: mart._id, name: "Iced coffee can", barcode: "8850999320014", price: 0.75, active: true });
     await put(MA.MartSale, { _id: "s1", business_id: mart._id, no: "S-000042", member_name: "Sok Dara", status: "paid", total: 3, at: new Date() });
@@ -180,6 +180,14 @@ const ok = (c, m, extra) => {
     const keys = (b.j.data?.alerts || []).map((a) => `${a.key}:${a.n}`);
     ok(b.s === 200 && keys.includes("tg_new:1") && keys.includes("staying") === false, "a new Telegram order waits", keys);
     ok(keys.includes("ev_review:0") === false && b.j.data.summary.orders_today === 1 && b.j.data.summary.today >= 6.5, "today's Telegram order counts in the summary", b.j.data.summary);
+    const dash = await (await fetch(`${base}/api/user/dashboard?fresh=1`, { headers: { "x-api-key": "k", authorization: `Bearer ${O.tok}` } })).json();
+    const tsRow = dash.data.sales?.by_business?.find((x) => x.kind === "tg_store");
+    ok(tsRow && tsRow.bills_today === 1 && tsRow.today >= 6.5, "the dashboard counts the Telegram Store's sales", dash.data.sales?.by_business);
+    ok(dash.data.sales.today === b.j.data.summary.today && dash.data.sales.yesterday === b.j.data.summary.yesterday, "Bizi's money = the dashboard's money", { dash: dash.data.sales.today, bizi: b.j.data.summary.today });
+    const wt = dash.data.now.find((t) => t.key === "waiting");
+    ok(wt?.by.some((x) => x.kind === "tg_store" && x.n === 1) && wt.tab.tg_store === "orders", "“Right now · waiting” has the new Telegram order", wt);
+    ok(!keys.includes("waiting:1") || b.j.data.alerts.filter((a) => a.key === "waiting").every((a) => a.n < wt.n), "the Telegram order is not counted twice in Bizi's alerts", keys);
+    ok(dash.data.top_items.some((x) => x.kind === "tg_store" && x.name_en === "Khmer iced coffee" && x.qty === 2), "Telegram best sellers in top items", dash.data.top_items);
     await TS.TgOrder.collection.updateOne({ no: 12 }, { $set: { created_date: new Date(Date.now() - 20 * 60e3) } });
     await GH.GhStay.collection.updateOne({ no: "B-0003" }, { $set: { to: new Date(Date.now() - 2 * 864e5) } });
     b = await br();
