@@ -235,7 +235,7 @@ async function brief(ownerId) {
 const prefsView = (p) => ({
   mute: p.mute || [],
   weekly: p.weekly !== false,
-  tg: { connected: !!p.tg?.chat_id, chat_name: p.tg?.chat_name || "", morning: p.tg?.morning !== false, alerts: p.tg?.alerts !== false, weekly: p.tg?.weekly !== false },
+  tg: { configured: require("../telegram").ready(), connected: !!p.tg?.chat_id, chat_name: p.tg?.chat_name || "", lang: p.tg?.lang || "km", morning: p.tg?.morning !== false, alerts: p.tg?.alerts !== false, weekly: p.tg?.weekly !== false },
   keys: { alerts: ALERT_KEYS, tips: TIP_KEYS },
 });
 

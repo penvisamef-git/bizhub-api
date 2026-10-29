@@ -865,6 +865,10 @@ module.exports = (prop, kit) => {
       const tgstore = await require("../tgstore/tgstore.route")
         .tick()
         .catch((err) => ({ error: err?.message || String(err) }));
+      // Bizi on Telegram: morning summary, Monday report, alerts while the app is closed (owners who linked it)
+      const bizi = await require("../bizi.telegram")
+        .tick()
+        .catch((err) => ({ error: err?.message || String(err) }));
       // "Delete my account": erase the accounts whose 30 days have passed (a few per run)
       const accounts = await require("../../user/account_delete")
         .purgeDueAccounts()
@@ -873,7 +877,7 @@ module.exports = (prop, kit) => {
       const googlePlay = await require("../../coin/google.route")
         .syncVoided()
         .catch((err) => ({ error: err?.message || String(err) }));
-      res.json({ success: true, checked: list.length, sent, attendance: att, guesthouse: gh, mart, ical, qr, debt, stamp, event, note, tgstore, accounts, googlePlay });
+      res.json({ success: true, checked: list.length, sent, attendance: att, guesthouse: gh, mart, ical, qr, debt, stamp, event, note, tgstore, bizi, accounts, googlePlay });
     } catch (err) {
       console.error("[daily-report]", err);
       res.status(500).json({ success: false });

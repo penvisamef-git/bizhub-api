@@ -16,12 +16,14 @@ const biziPrefsSchema = new Schema(
     tg: {
       chat_id: { type: String, default: "" },
       chat_name: { type: String, default: "" },
+      lang: { type: String, enum: ["en", "km"], default: "km" }, // the language of the messages (the owner's, when linking)
       connected_at: { type: Date, default: null },
       link_code: { type: String, default: "" },
       link_expires: { type: Date, default: null },
       morning: { type: Boolean, default: true }, // the summary at 8:00
       alerts: { type: Boolean, default: true }, // "a new order waits 5 min", "a guest is past check-out"…
       weekly: { type: Boolean, default: true },
+      checked_at: { type: Date, default: null }, // the scheduler's last look (the oldest go first)
       sent: { type: Schema.Types.Mixed, default: {} }, // what was already sent: { morning: "2026-10-29", weekly: "2026-10-26", alerts: { "tg_new:<id>": date } }
     },
   },

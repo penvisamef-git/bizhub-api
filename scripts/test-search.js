@@ -15,7 +15,7 @@ const ok = (c, m, extra) => {
 (async () => {
   const { MongoMemoryServer } = require("mongodb-memory-server");
   const mem = await MongoMemoryServer.create();
-  Object.assign(process.env, { NODE_ENV: "test", API_AUTH_KEY: "k", JWT_SECRET: "s", MONGO_URI: mem.getUri("test"), BIZHUB_ENV: "" });
+  Object.assign(process.env, { NODE_ENV: "test", API_AUTH_KEY: "k", JWT_SECRET: "s", MONGO_URI: mem.getUri("test"), BIZHUB_ENV: "", TELEGRAM_BOT_TOKEN: "123456:TEST-token", TELEGRAM_BOT_USERNAME: "BizHubTestBot", WEB_URL: "https://bizhub-cambodia.web.app" });
 
   const mongoose = require("mongoose");
   const jwt = require("jsonwebtoken");
@@ -256,6 +256,57 @@ const ok = (c, m, extra) => {
     fresh();
     ok((await br()).j.data.weekly === null, "weekly off → no report");
     await call("PUT", "/api/user/bizi/prefs", { weekly: true });
+
+    console.log("\nBizi on Telegram");
+    const telegram = require("../src/telegram");
+    const BT = require("../src/biz/bizi.telegram");
+    const BiziPrefs = require("../src/biz/bizi.model");
+    const sentTg = [];
+    const fetch0 = globalThis.fetch;
+    globalThis.fetch = async (url, o) => {
+      if (!String(url).startsWith("https://api.telegram.org/")) return fetch0(url, o);
+      sentTg.push({ method: String(url).split("/").pop(), body: JSON.parse(o.body) });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 7 } }), { headers: { "Content-Type": "application/json" } });
+    };
+    r2 = await call("POST", "/api/user/bizi/telegram/link", { lang: "en" });
+    const code = (r2.j.data?.url || "").split("start=")[1];
+    ok(r2.s === 200 && /^https:\/\/t\.me\/BizHubTestBot\?start=bz_[A-Za-z0-9]{24}$/.test(r2.j.data.url), "link: a t.me link with a one-time code", r2.j);
+    await telegram.handleUpdate({ message: { chat: { id: 5151, type: "private", first_name: "Sokha" }, text: `/start ${code}` } });
+    ok(sentTg.some((m) => m.method === "sendMessage" && m.body.chat_id === 5151 && m.body.text.includes("Bizi is connected")), "Start → connected, in English", sentTg.map((m) => m.body.text));
+    r2 = await call("GET", "/api/user/bizi/prefs");
+    ok(r2.j.data.tg.connected && r2.j.data.tg.chat_name === "Sokha" && r2.j.data.tg.lang === "en", "settings show Telegram connected", r2.j.data.tg);
+    sentTg.length = 0;
+    await telegram.handleUpdate({ message: { chat: { id: 6262, type: "private", first_name: "Nobody" }, text: `/start ${code}` } });
+    ok(sentTg[0]?.body.text.includes("expired"), "the same code twice → expired", sentTg.map((m) => m.body.text));
+    // the morning: summary + (a new week) last week's report; alerts that wait
+    await call("PUT", "/api/user/bizi/prefs", { tg: { morning: true } });
+    const p0 = await BiziPrefs.findOne({ customer_id: O.c._id }).lean();
+    const nine = new Date(Date.UTC(2026, 9, 29, 2, 0)); // 09:00 Cambodia
+    fresh();
+    let due = await BT.dueFor({ ...p0, tg: { ...p0.tg, sent: {} } }, { brief: () => BZ.brief(O.c._id), ownerName: "Sokha", now: nine });
+    const texts = due.out.map((m) => m.text);
+    ok(texts.some((x) => x.startsWith("📊 <b>Last week</b>")) && texts.some((x) => x.startsWith("☀️ <b>Good morning, Sokha</b>")), "after 08:00: last week's report + the morning summary", texts);
+    ok(texts.some((x) => x.startsWith("⏰ <b>1 new Telegram order waiting")) && due.out.find((m) => m.text.startsWith("⏰ <b>1 new Telegram")).extra.reply_markup.inline_keyboard[0][0].url.endsWith("?tab=orders"), "a waiting order → an alert with Open", texts);
+    due = await BT.dueFor({ ...p0, tg: { ...p0.tg, sent: due.sent } }, { brief: () => BZ.brief(O.c._id), ownerName: "Sokha", now: new Date(nine.getTime() + 20 * 60e3) });
+    ok(due.out.length === 0, "20 minutes later: nothing again (once each)", due.out.map((m) => m.text));
+    const early = await BT.dueFor({ ...p0, tg: { ...p0.tg, sent: {} } }, { brief: () => BZ.brief(O.c._id), ownerName: "Sokha", now: new Date(Date.UTC(2026, 9, 28, 23, 30)) }); // 06:30
+    ok(!early.out.some((m) => m.text.startsWith("☀️")), "before 08:00: no morning summary yet", early.out.map((m) => m.text));
+    const quiet = await BT.dueFor({ ...p0, tg: { ...p0.tg, alerts: false, morning: false, weekly: false, sent: {} } }, { brief: () => BZ.brief(O.c._id), ownerName: "Sokha", now: nine });
+    ok(quiet.out.length === 0, "all three off → no messages", quiet.out.map((m) => m.text));
+    // the scheduler sends them, then not again
+    sentTg.length = 0;
+    await BiziPrefs.updateOne({ customer_id: O.c._id }, { $set: { "tg.sent": {} } });
+    fresh();
+    let tk = await BT.tick();
+    ok(tk.owners === 1 && sentTg.filter((m) => m.body.chat_id === "5151").length >= 1, "tick: sends to the linked chat", { tk, n: sentTg.length });
+    sentTg.length = 0;
+    tk = await BT.tick();
+    ok(sentTg.length === 0, "tick again: nothing new", sentTg.map((m) => m.body.text));
+    r2 = await call("POST", "/api/user/bizi/telegram/test");
+    ok(r2.s === 200 && sentTg.some((m) => m.body.text.includes("This is a test")), "Send a test");
+    r2 = await call("DELETE", "/api/user/bizi/telegram");
+    ok(r2.s === 200 && (await call("GET", "/api/user/bizi/prefs")).j.data.tg.connected === false, "disconnect");
+    globalThis.fetch = fetch0;
 
     console.log("\nteam members");
     r = await find("coffee", A);
