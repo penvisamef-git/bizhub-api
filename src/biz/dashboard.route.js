@@ -38,7 +38,8 @@ async function build(ownerId) {
   const lastWeekSameEnd = addDays(lastWeekStart, dow); // same weekday last week
   const monthStart = `${today.slice(0, 7)}-01`;
   const chartStart = addDays(today, -13);
-  const from = [chartStart, lastWeekStart, monthStart].sort()[0];
+  const prevWeekStart = addDays(weekStart, -14); // the full week before last (Bizi's Monday report compares with it)
+  const from = [chartStart, prevWeekStart, monthStart].sort()[0];
 
   const [businesses, wallet] = await Promise.all([listFor(ownerId), coin.getCustomerWallet(ownerId)]);
   const spent = await CoinTransaction.aggregate([{ $match: { from_customer: new mongoose.Types.ObjectId(String(ownerId)), created_date: { $gte: new Date(now - 30 * DAY) } } }, { $group: { _id: null, n: { $sum: "$amount" } } }]);
@@ -184,7 +185,7 @@ async function build(ownerId) {
       month: round(m.sales, c),
       open_now: tg ? 0 : (gh ? ghIn : openNow).find((o) => String(o._id) === String(b._id))?.n || 0,
       days: days14.map((d) => round(rows.find((r) => r._id.d === d)?.sales || 0, c)),
-      _raw: { t, y, w, lw, m, rows },
+      _raw: { t, y, w, lw, m, rows, lwf: sum(rows, lastWeekStart, addDays(weekStart, -1)), pwf: sum(rows, prevWeekStart, addDays(weekStart, -8)) },
     };
   });
   const tot = (k) =>
@@ -231,6 +232,21 @@ async function build(ownerId) {
         })),
         week_start: weekStart,
         by_business: per.map(({ _raw, ...p }) => p),
+        // last full week (Mon → Sun) vs the week before, its best day, each business (Bizi's Monday report)
+        weekly: (() => {
+          const lastDays = Array.from({ length: 7 }, (_, i) => addDays(lastWeekStart, i));
+          const dayTotal = (d) => per.reduce((n, p) => n + toMain(p._raw.rows.find((r) => r._id.d === d)?.sales || 0, sellers.find((b) => b._id === p.id)), 0);
+          const best = lastDays.map((d) => ({ day: d, sales: round(dayTotal(d), main) })).sort((a, b) => b.sales - a.sales)[0];
+          return {
+            from: lastWeekStart,
+            to: addDays(weekStart, -1),
+            total: tot("lwf"),
+            bills: bills("lwf"),
+            before: tot("pwf"),
+            best_day: best && best.sales > 0 ? best : null,
+            by_business: per.map((p) => ({ id: p.id, name: p.name, kind: p.kind, currency: p.currency, total: round(p._raw.lwf.sales, p.currency), before: round(p._raw.pwf.sales, p.currency) })),
+          };
+        })(),
       }
     : null;
 
@@ -287,6 +303,36 @@ async function build(ownerId) {
   }
   const now_ = await rightNow({ businesses, rests, ghs, marts, tss, ending, stock, now, weekStart });
   return { at: now, coins, businesses, sales, top_items, attention, now: now_ };
+}
+
+// best sellers between two Cambodia days (Bizi's Monday report: last week), every business that sells — by quantity
+async function topItemsOf(businesses, fromDay, toDay, limit = 3) {
+  const a = dayStart(fromDay);
+  const z = dayStart(addDays(toDay, 1));
+  const idsOf = (type) => businesses.filter((b) => b.category === type).map((b) => b._id);
+  const nameOf = new Map(businesses.map((b) => [String(b._id), b.name]));
+  const [rest, mart, ts] = [idsOf("restaurant"), idsOf("mart"), idsOf("tg_store")];
+  const group = (lines, name, qty, idField) => [
+    { $unwind: `$${lines}` },
+    { $group: { _id: { b: "$business_id", i: { $ifNull: [`$${lines}.${idField}`, `$${lines}.${name}`] } }, name: { $first: `$${lines}.${name}` }, qty: { $sum: `$${lines}.${qty}` } } },
+    { $sort: { qty: -1 } },
+    { $limit: limit * 3 },
+  ];
+  const M = require("./restaurant/restaurant.models");
+  const MM = require("./mart/mart.models");
+  const TS = require("./tgstore/tgstore.models");
+  const rows = (
+    await Promise.all([
+      rest.length ? M.RestOrder.aggregate([{ $match: { business_id: { $in: rest }, status: "paid", paid_at: { $gte: a, $lt: z } } }, { $unwind: "$lines" }, { $match: { "lines.status": { $ne: "void" } } }, { $group: { _id: { b: "$business_id", i: "$lines.name_en" }, name: { $first: "$lines.name_en" }, qty: { $sum: "$lines.qty" } } }, { $sort: { qty: -1 } }, { $limit: limit * 3 }]) : [],
+      mart.length ? MM.MartSale.aggregate([{ $match: { business_id: { $in: mart }, status: "paid", at: { $gte: a, $lt: z } } }, ...group("items", "name", "qty", "product_id")]) : [],
+      ts.length ? TS.TgOrder.aggregate([{ $match: { business_id: { $in: ts }, status: { $ne: "cancelled" }, created_date: { $gte: a, $lt: z } } }, ...group("items", "name", "qty", "product_id")]) : [],
+    ])
+  ).flat();
+  return rows
+    .map((r) => ({ name: r.name || "", qty: Math.round(r.qty * 1000) / 1000, business: nameOf.get(String(r._id.b)) || "" }))
+    .filter((r) => r.name && r.qty > 0)
+    .sort((x, y) => y.qty - x.qty)
+    .slice(0, limit);
 }
 
 // "right now" across all the owner's businesses: what is waiting, who is here, what runs out
@@ -399,6 +445,7 @@ module.exports = (prop) => {
 };
 // adding / changing a business should show at once
 module.exports.forget = (ownerId) => cache.delete(String(ownerId));
+module.exports.topItemsOf = topItemsOf;
 // the same answer for Bizi's brief (src/biz/bizi.route.js), from the same 30 s cache
 module.exports.dashboardOf = async (ownerId) => {
   const key = String(ownerId);

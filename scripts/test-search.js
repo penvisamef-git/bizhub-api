@@ -196,6 +196,67 @@ const ok = (c, m, extra) => {
     ok(b.j.data.alerts.some((a) => a.key === "checkout_late" && a.tab === "today" && String(a.business_id) === String(gh._id)), "a guest past check-out → the guest house's Today", b.j.data.alerts);
     ok((await br(X)).j.data.alerts.length === 0, "a stranger's brief is empty");
 
+    console.log("\nBizi tips, settings, weekly report");
+    const D = require("../src/biz/dashboard.route");
+    const BZ = require("../src/biz/bizi.route");
+    const fresh = () => {
+      D.forget(O.c._id);
+      BZ.forgetTips(O.c._id);
+    };
+    const call = async (method, path, body, u = O) => {
+      const x = await fetch(`${base}${path}`, { method, headers: { "x-api-key": "k", authorization: `Bearer ${u.tok}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+      return { s: x.status, j: await x.json().catch(() => ({})) };
+    };
+    fresh();
+    b = await br();
+    const tipKeys = (b.j.data.tips || []).map((t) => `${t.key}:${t.business}`);
+    ok(tipKeys.includes("tg_no_group:Mekong Coffee Shop") && tipKeys.includes("rest_no_tables:Mekong Kitchen") && tipKeys.includes("gh_no_rooms:Lotus Guest House"), "tips: things not set up, one per business first", tipKeys);
+    ok(!tipKeys.some((k) => k.startsWith("tg_no_products") || k.startsWith("rest_no_menu") || k.startsWith("att_no_staff")), "no tip for what is already there (products, menu, staff)", tipKeys);
+    const tgTip = b.j.data.tips.find((t) => t.key === "tg_no_group");
+    ok(tgTip.tab === "share" && tgTip.help === "tg_group" && tgTip.category === "tg_store", "a tip opens its section + has its how-to", tgTip);
+    ok(b.j.data.tips.length <= 5, "at most 5 tips", b.j.data.tips.length);
+    await TS.TgStore.collection.insertOne({ business_id: coffee._id, slug: "mekong-coffee", tg: { chat_id: "-1001", chat_name: "Staff" } });
+    fresh();
+    b = await br();
+    ok(!b.j.data.tips.some((t) => t.key === "tg_no_group"), "group connected → that tip goes", b.j.data.tips.map((t) => t.key));
+    let r2 = await call("POST", "/api/user/bizi/snooze", { key: "gh_no_rooms", business_id: String(gh._id) });
+    ok(r2.s === 200 && r2.j.data.days === 14, "Not now: a tip hides 14 days", r2.j);
+    b = await br();
+    ok(!b.j.data.tips.some((t) => t.key === "gh_no_rooms"), "the snoozed tip is gone at once", b.j.data.tips.map((t) => t.key));
+    ok((await call("POST", "/api/user/bizi/snooze", { key: "nope", business_id: String(gh._id) })).s === 400, "an unknown tip is refused");
+    r2 = await call("GET", "/api/user/bizi/prefs");
+    ok(r2.s === 200 && r2.j.data.mute.length === 0 && r2.j.data.weekly === true && r2.j.data.tg.connected === false && r2.j.data.keys.alerts.includes("sold_out"), "settings: nothing muted at first", r2.j.data);
+    r2 = await call("PUT", "/api/user/bizi/prefs", { mute: ["sold_out", "tips", "rm -rf"], tg: { morning: false } });
+    ok(r2.s === 200 && r2.j.data.mute.join() === "sold_out,tips" && r2.j.data.tg.morning === false, "mute sold out + all tips (unknown words dropped)", r2.j.data);
+    await TS.TgProduct.collection.updateOne({ name: "Khmer iced coffee" }, { $set: { sold_out: true } });
+    fresh();
+    b = await br();
+    ok(!b.j.data.alerts.some((a) => a.key === "sold_out") && b.j.data.tips.length === 0 && b.j.data.prefs.mute.includes("sold_out"), "muted: no sold-out alert, no tips", { alerts: b.j.data.alerts.map((a) => a.key), tips: b.j.data.tips });
+    ok((await call("PUT", "/api/user/bizi/prefs", { mute: "x" })).s === 400, "mute must be a list");
+    await call("PUT", "/api/user/bizi/prefs", { mute: [] });
+    // last week: a Telegram order of $20 on its Wednesday, the week before $10
+    const kh = (offsetDays) => {
+      const d = new Date(Date.now() + 7 * 3600e3);
+      const dow = (d.getUTCDay() + 6) % 7;
+      return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - dow + offsetDays, 5)); // 12:00 Cambodia
+    };
+    await TS.TgOrder.collection.insertMany([
+      { business_id: coffee._id, no: 30, token: "w1", status: "done", total: 20, currency: "USD", items: [{ name: "Khmer iced coffee", qty: 8, total: 20 }], created_date: kh(-5) },
+      { business_id: coffee._id, no: 31, token: "w2", status: "done", total: 10, currency: "USD", items: [{ name: "Palm sugar latte", qty: 3, total: 10 }], created_date: kh(-12) },
+      { business_id: coffee._id, no: 32, token: "w3", status: "cancelled", total: 99, currency: "USD", items: [{ name: "Cancelled cake", qty: 50, total: 99 }], created_date: kh(-5) },
+    ]);
+    fresh();
+    b = await br();
+    const wk = b.j.data.weekly;
+    ok(wk && wk.total >= 20 && wk.before >= 10 && wk.change_pct !== null, "weekly: last week vs the week before", wk);
+    ok(wk && wk.best_day && wk.best_day.sales >= 20 && wk.best_day.day >= wk.from && wk.best_day.day <= wk.to, "weekly: the best day is in last week", wk && wk.best_day);
+    ok(wk && wk.top[0]?.name === "Khmer iced coffee" && !wk.top.some((t) => t.name === "Cancelled cake"), "weekly: last week's best sellers (cancelled left out)", wk && wk.top);
+    ok(wk && wk.up.some((x) => x.name === "Mekong Coffee Shop"), "weekly: which business went up", wk && wk.up);
+    await call("PUT", "/api/user/bizi/prefs", { weekly: false });
+    fresh();
+    ok((await br()).j.data.weekly === null, "weekly off → no report");
+    await call("PUT", "/api/user/bizi/prefs", { weekly: true });
+
     console.log("\nteam members");
     r = await find("coffee", A);
     ok(r.s === 200 && r.j.data.results.length === 0, "not in a team yet → nothing", titles(r));
