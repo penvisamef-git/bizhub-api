@@ -13,8 +13,13 @@ const DEFAULT_HOMEPAGE = {
     telegram_url: "https://t.me/bizhubcambodia",
     email: "bizhubcambodia@gmail.com",
     address: "",
-    facebook_url: "",
+    facebook_url: "https://www.facebook.com/share/19qSkCvnPp/",
     map_url: "",
+    // "Follow us" on the homepage (v3.2.0): an empty link hides that button
+    tiktok_url: "https://www.tiktok.com/@bizhubcambodia",
+    youtube_url: "https://www.youtube.com/@bizhubcambodia",
+    coolapp_url: "https://channel.coolapp.com.kh/@bizhub_cambodia",
+    tg_channel_url: "https://t.me/bizhubcambodia",
   },
   coin: { pack_coins: 100, pack_price_usd: 10, signup_bonus: 200 },
   // coins a customer pays to add one business of each type (keys = business types in src/biz)

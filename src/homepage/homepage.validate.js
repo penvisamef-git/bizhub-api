@@ -43,7 +43,7 @@ function validateHomepage(body) {
       if (typeof email !== "string" || (email && !EMAIL_RE.test(email))) return { error: "អ៊ីមែលមិនត្រឹមត្រូវ!" };
       set["contact.email"] = email;
     }
-    for (const k of ["telegram_url", "facebook_url", "map_url"]) {
+    for (const k of ["telegram_url", "facebook_url", "map_url", "tiktok_url", "youtube_url", "coolapp_url", "tg_channel_url"]) {
       if (c[k] === undefined) continue;
       const v = str(c[k]);
       if (typeof v !== "string" || !isUrlOrEmpty(v)) return { error: `${k} ត្រូវតែជាតំណ https://...` };

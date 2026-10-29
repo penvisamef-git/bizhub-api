@@ -37,6 +37,11 @@ const homepageSchema = new mongoose.Schema(
       address: { type: String, default: d.contact.address },
       facebook_url: { type: String, default: d.contact.facebook_url },
       map_url: { type: String, default: d.contact.map_url },
+      // "Follow us" (v3.2.0)
+      tiktok_url: { type: String, default: d.contact.tiktok_url },
+      youtube_url: { type: String, default: d.contact.youtube_url },
+      coolapp_url: { type: String, default: d.contact.coolapp_url },
+      tg_channel_url: { type: String, default: d.contact.tg_channel_url },
     },
 
     // e.g. 100 coins = $10, 200 free coins at sign-up

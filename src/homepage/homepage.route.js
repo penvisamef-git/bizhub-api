@@ -13,6 +13,9 @@ const NEW_TYPES = ["digital_note", "tg_store"];
 function fillNew(data) {
   const { DEFAULT_HOMEPAGE } = require("./homepage.defaults");
   if (!data) return data;
+  // links added later (the "Follow us" channels, v3.2.0): a saved page without them gets the defaults
+  data.contact = data.contact || {};
+  for (const [k, v] of Object.entries(DEFAULT_HOMEPAGE.contact)) if (data.contact[k] === undefined) data.contact[k] = Array.isArray(v) ? [...v] : v;
   if (Array.isArray(data.services)) {
     const have = new Set(data.services.map((s) => s.key));
     let n = data.services.length;
