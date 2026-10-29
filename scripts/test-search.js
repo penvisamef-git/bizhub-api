@@ -319,6 +319,33 @@ const ok = (c, m, extra) => {
     ok(titles(r).includes("products:Khmer iced coffee") && !titles(r).some((x) => /Mini Mart|can|milk|supplier/.test(x)), "team on → only that shared shop", titles(r));
     r = await find("coffee", X);
     ok(titles(r).includes("products:Stranger coffee") && !titles(r).includes("products:Khmer iced coffee"), "the stranger sees only their own shop", titles(r));
+
+    console.log("\nwhat Bizi commands need from the search");
+    r = await find("coffee", A);
+    ok(r.j.data.results.find((x) => x.title === "Khmer iced coffee")?.role === "view", "a View only member's results say role view (no buttons)");
+    r = await find("coffee");
+    ok(r.j.data.results.filter((x) => x.business_id && String(x.business_id) === String(coffee._id)).every((x) => x.role === "owner"), "the owner's results say role owner");
+    await MA.MartProduct.updateOne({ name: "Iced coffee can" }, { $set: { track_stock: true, stock: 12, low_stock: 3 } });
+    r = await find("iced coffee can");
+    ok(r.j.data.results.find((x) => x.title === "Iced coffee can")?.stock === 12, "a product that counts its stock: stock 12");
+    r = await find("iced coffee with milk");
+    ok(r.j.data.results.find((x) => x.title === "Iced coffee with milk")?.stock === null, "a menu item that doesn't count stock: stock null");
+    await DB.DebtCustomer.updateOne({ _id: dc.insertedId }, { $set: { balance: { usd: 7.5, khr: 0 } } });
+    r = await find("Uncle Heng");
+    let row = r.j.data.results.find((x) => x.title === "Uncle Heng");
+    ok(row?.money === 7.5 && row.cur === "USD", "a debt customer shows what they owe", row);
+    r = await find("Sok Dara");
+    ok(r.j.data.results.find((x) => x.title === "Sok Dara")?.stamps === 0, "a stamp customer shows their stamps");
+    const typ = await put(GH.GhRoomType, { business_id: gh._id, name: "Double", price: 20 });
+    await put(GH.GhRoom, { business_id: gh._id, type_id: typ.insertedId, name: "101", floor: "1st floor", hk: "dirty", active: true });
+    r = await find("101");
+    row = r.j.data.results.find((x) => x.kind === "room");
+    ok(row?.title === "101" && row.flag === "dirty" && row.tab === "housekeeping", "rooms are found by name, with their clean state", row);
+    const pov = await AT.AttStaff.findOne({ name: "Srey Pov" });
+    await put(AT.AttLeave, { business_id: att._id, staff_id: pov._id, type: "annual", from: "2026-11-02", to: "2026-11-03", days: 2, status: "pending" });
+    r = await find("Srey Pov");
+    row = r.j.data.results.find((x) => x.title === "Srey Pov");
+    ok(row?.leave?.from === "2026-11-02" && row.flag === "leave" && row.tab === "leave", "staff with a leave request waiting: leave + flag", row);
   } catch (err) {
     console.error("\n✗", err);
     fail++;

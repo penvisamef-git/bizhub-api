@@ -90,16 +90,19 @@ function dayOf(offsetDays = 0) {
 
 // the businesses this person can open: own + team-shared (team add-on on)
 async function myBusinesses(customerId) {
-  const own = await Business.find({ owner_id: customerId, deleted: false }).select("name category logo_url").lean();
+  const own = (await Business.find({ owner_id: customerId, deleted: false }).select("name category logo_url").lean()).map((b) => ({ ...b, role: "owner" }));
   const rows = await TeamMember.find({ customer_id: customerId, status: "active" }).select("business_id role").lean();
   let shared = [];
   if (rows.length) {
     const ids = rows.map((r) => r.business_id);
     const lic = await License.find({ business_id: { $in: ids }, product: "team", item: "" }).select("business_id expires_at").lean();
     const on = new Set(lic.filter((l) => l.expires_at === null || new Date(l.expires_at) > new Date()).map((l) => String(l.business_id)));
-    shared = await Business.find({ _id: { $in: ids.filter((id) => on.has(String(id))) }, deleted: false })
-      .select("name category logo_url")
-      .lean();
+    const roleOf = new Map(rows.map((r) => [String(r.business_id), r.role]));
+    shared = (
+      await Business.find({ _id: { $in: ids.filter((id) => on.has(String(id))) }, deleted: false })
+        .select("name category logo_url")
+        .lean()
+    ).map((b) => ({ ...b, role: roleOf.get(String(b._id)) || "view" }));
   }
   const seen = new Set();
   return [...own, ...shared].filter((b) => !seen.has(String(b._id)) && seen.add(String(b._id)));
@@ -128,8 +131,8 @@ const SEARCHERS = [
     model: () => M("./restaurant/restaurant.models").RestItem,
     fields: ["name_en", "name_km", "code"],
     smart: { sold_out: { available: false } },
-    select: "business_id name_en name_km code price active available",
-    shape: (r) => ({ kind: "product", title: r.name_en || r.name_km, sub: [r.name_en && r.name_km ? r.name_km : "", r.code].filter(Boolean).join(" · "), money: r.price, tab: "menu", flag: r.available === false ? "sold_out" : r.active === false ? "hidden" : "" }),
+    select: "business_id name_en name_km code price active available track_stock stock",
+    shape: (r) => ({ kind: "product", title: r.name_en || r.name_km, sub: [r.name_en && r.name_km ? r.name_km : "", r.code].filter(Boolean).join(" · "), money: r.price, tab: "menu", flag: r.available === false ? "sold_out" : r.active === false ? "hidden" : "", stock: r.track_stock ? (r.stock ?? 0) : null }),
   },
   {
     type: "mart",
@@ -138,7 +141,7 @@ const SEARCHERS = [
     fields: ["name", "barcode", "plu"],
     smart: { sold_out: { track_stock: true, stock: { $lte: 0 } }, low_stock: { track_stock: true, $expr: { $lte: ["$stock", "$low_stock"] } } },
     select: "business_id name barcode price active stock track_stock low_stock",
-    shape: (r) => ({ kind: "product", title: r.name, sub: [r.barcode, r.track_stock ? `${r.stock ?? 0} left` : ""].filter(Boolean).join(" · "), money: r.price, tab: r.track_stock && r.stock <= (r.low_stock ?? 5) ? "stock" : "products", flag: r.track_stock && r.stock <= 0 ? "sold_out" : r.track_stock && r.stock <= (r.low_stock ?? 5) ? "low_stock" : r.active === false ? "hidden" : "" }),
+    shape: (r) => ({ kind: "product", title: r.name, sub: [r.barcode, r.track_stock ? `${r.stock ?? 0} left` : ""].filter(Boolean).join(" · "), money: r.price, tab: r.track_stock && r.stock <= (r.low_stock ?? 5) ? "stock" : "products", flag: r.track_stock && r.stock <= 0 ? "sold_out" : r.track_stock && r.stock <= (r.low_stock ?? 5) ? "low_stock" : r.active === false ? "hidden" : "", stock: r.track_stock ? (r.stock ?? 0) : null }),
   },
   {
     type: "menu_qr",
@@ -218,6 +221,17 @@ const SEARCHERS = [
     shape: (r) => ({ kind: "order", title: `#${r.no}`, sub: [r.buyer?.name, r.buyer?.phone].filter(Boolean).join(" · "), money: r.total, status: r.status, at: r.created_date, tab: "orders" }),
   },
 
+  {
+    type: "guest_house",
+    group: "other",
+    model: () => M("./guesthouse/guesthouse.models").GhRoom,
+    base: { active: { $ne: false } },
+    fields: ["name", "floor"],
+    select: "business_id name floor hk",
+    sort: { name: 1 },
+    shape: (r) => ({ kind: "room", title: r.name, sub: r.floor || "", tab: "housekeeping", flag: r.hk && r.hk !== "ready" ? r.hk : "" }),
+  },
+
   // ---------------- people
   {
     type: "tg_store",
@@ -241,9 +255,9 @@ const SEARCHERS = [
     num: (n) => ({ no: n }),
     date: "created_date",
     latest: true,
-    select: "business_id no name phone",
+    select: "business_id no name phone stamps",
     sort: { last_visit_at: -1 },
-    shape: (r) => ({ kind: "person", title: r.name || r.phone, sub: [r.no ? `#${r.no}` : "", r.phone].filter(Boolean).join(" · "), tab: "customers" }),
+    shape: (r) => ({ kind: "person", title: r.name || r.phone, sub: [r.no ? `#${r.no}` : "", r.phone].filter(Boolean).join(" · "), tab: "customers", stamps: r.stamps || 0 }),
   },
   {
     type: "attendance",
@@ -262,9 +276,9 @@ const SEARCHERS = [
     fields: ["name", "note", "address", "telegram"],
     phone: ["phone"],
     latest: true,
-    select: "business_id name phone",
+    select: "business_id name phone balance",
     sort: { last_at: -1 },
-    shape: (r) => ({ kind: "person", title: r.name, sub: r.phone || "", tab: "customers", params: { c: String(r._id) } }),
+    shape: (r) => ({ kind: "person", title: r.name, sub: r.phone || "", tab: "customers", params: { c: String(r._id) }, ...(r.balance?.usd > 0 ? { money: r.balance.usd, cur: "USD" } : r.balance?.khr > 0 ? { money: r.balance.khr, cur: "KHR" } : {}) }),
   },
   {
     type: "restaurant",
@@ -366,7 +380,7 @@ async function run(biz, t, n) {
         .then((rows) =>
           rows.map((r) => {
             const b = byId.get(String(r.business_id)) || {};
-            return { group: s.group, business_id: r.business_id, business: b.name || "", category: b.category || s.type, ...s.shape(r), id: String(r._id), ...(smart ? { smart: true } : {}) };
+            return { group: s.group, business_id: r.business_id, business: b.name || "", category: b.category || s.type, role: b.role || "view", ...s.shape(r), id: String(r._id), ...(smart ? { smart: true } : {}) };
           }),
         );
     if (t.smart.length) {
@@ -380,6 +394,23 @@ async function run(biz, t, n) {
     if (r.status === "fulfilled") out.push(...r.value);
     else console.error("[search]", r.reason?.message);
   }
+  // staff with a leave request waiting: Bizi can approve / reject it
+  const staff = out.filter((r) => r.category === "attendance" && r.kind === "person");
+  if (staff.length) {
+    try {
+      const { AttLeave } = M("./attendance/attendance.models");
+      const rows = await AttLeave.find({ business_id: { $in: idsOf("attendance") }, staff_id: { $in: staff.map((r) => r.id) }, status: "pending" })
+        .sort({ from: 1 })
+        .select("staff_id from to days")
+        .lean();
+      for (const r of staff) {
+        const l = rows.find((x) => String(x.staff_id) === r.id);
+        if (l) Object.assign(r, { leave: { id: String(l._id), from: l.from, to: l.to, days: l.days }, flag: "leave", tab: "leave" });
+      }
+    } catch (e) {
+      console.error("[search] leave", e.message);
+    }
+  }
   // smart answers first; one row per thing
   const seen = new Set();
   return out
@@ -392,17 +423,19 @@ async function run(biz, t, n) {
     });
 }
 
+const bizRow = (b) => ({ group: "businesses", kind: "business", business_id: b._id, business: b.name, category: b.category, role: b.role, title: b.name, sub: "", tab: "", logo: b.logo_url || "", id: String(b._id) });
+
 async function search(customerId, raw, limit = 5) {
   let t = termsOf(raw);
   if (t.q.length < 2 && t.num === null) return { q: t.q, smart: [], results: [] };
   const n = Math.min(Math.max(Number(limit) || 5, 1), 10);
   const biz = await myBusinesses(customerId);
   const nameHit = (re) => biz.filter((b) => t.allWords.every((w) => w.test(b.name)) || re.test(b.name));
-  let results = [...nameHit(t.re).slice(0, n).map((b) => ({ group: "businesses", kind: "business", business_id: b._id, business: b.name, category: b.category, title: b.name, sub: "", tab: "", logo: b.logo_url || "", id: String(b._id) })), ...(await run(biz, t, n))];
+  let results = [...nameHit(t.re).slice(0, n).map(bizRow), ...(await run(biz, t, n))];
   // nothing? allow a missing / doubled letter once
   if (!results.length && t.allWords.some((w) => w.source.length >= 4)) {
     t = termsOf(raw, { fuzzy: true });
-    results = [...nameHit(t.re).slice(0, n).map((b) => ({ group: "businesses", kind: "business", business_id: b._id, business: b.name, category: b.category, title: b.name, sub: "", tab: "", logo: b.logo_url || "", id: String(b._id) })), ...(await run(biz, t, n))];
+    results = [...nameHit(t.re).slice(0, n).map(bizRow), ...(await run(biz, t, n))];
   }
   return { q: t.q, smart: t.smart, fuzzy: t.fuzzy && results.length > 0, results };
 }
