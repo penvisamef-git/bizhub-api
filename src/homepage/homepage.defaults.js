@@ -19,7 +19,7 @@ const DEFAULT_HOMEPAGE = {
     tiktok_url: "https://www.tiktok.com/@bizhubcambodia",
     youtube_url: "https://www.youtube.com/@bizhubcambodia",
     coolapp_url: "https://channel.coolapp.com.kh/@bizhub_cambodia",
-    tg_channel_url: "https://t.me/bizhubcambodia",
+    tg_channel_url: "https://t.me/bizhub_cambodia",
   },
   coin: { pack_coins: 100, pack_price_usd: 10, signup_bonus: 200 },
   // coins a customer pays to add one business of each type (keys = business types in src/biz)

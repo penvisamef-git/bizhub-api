@@ -40,7 +40,7 @@ const ok = (c, m, extra) => {
     tiktok_url: "https://www.tiktok.com/@bizhubcambodia",
     youtube_url: "https://www.youtube.com/@bizhubcambodia",
     coolapp_url: "https://channel.coolapp.com.kh/@bizhub_cambodia",
-    tg_channel_url: "https://t.me/bizhubcambodia",
+    tg_channel_url: "https://t.me/bizhub_cambodia",
   };
 
   try {
