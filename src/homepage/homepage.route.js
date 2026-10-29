@@ -4,7 +4,7 @@ const { logActivity } = require("../util/log");
 const { only_super_admin } = require("../util/permission");
 
 const serverError = "ម៉ាសុីនមេមានបញ្ហា សូមព្យាយាមម្តងទៀតពេលក្រោយ!";
-const PUBLIC_FIELDS = "-_id contact coin prices payment_methods app services groups texts updated_date";
+const PUBLIC_FIELDS = "-_id contact powered_by coin prices payment_methods app services groups texts updated_date";
 
 // Service types added after the homepage was saved (e.g. digital_note): show them anyway — a service card
 // after the others, and in the group the defaults put them in (until the super admin saves the page again).
@@ -15,6 +15,7 @@ function fillNew(data) {
   if (!data) return data;
   // links added later (the "Follow us" channels, v3.2.0): a saved page without them gets the defaults
   data.contact = data.contact || {};
+  data.powered_by = { ...DEFAULT_HOMEPAGE.powered_by, ...(data.powered_by || {}) };
   for (const [k, v] of Object.entries(DEFAULT_HOMEPAGE.contact)) if (data.contact[k] === undefined) data.contact[k] = Array.isArray(v) ? [...v] : v;
   if (Array.isArray(data.services)) {
     const have = new Set(data.services.map((s) => s.key));
@@ -72,7 +73,7 @@ const route = (prop) => {
   });
 
   // ===================================== ADMIN: UPDATE ================================================
-  // PUT /api/admin/homepage  body: any of { contact, coin, payment_methods, app, services, texts }
+  // PUT /api/admin/homepage  body: any of { contact, powered_by, coin, payment_methods, app, services, texts }
   // Only the parts you send change. texts.en / texts.km replace that language's overrides.
   prop.app.put(adminUrl, ...guard, async (req, res) => {
     try {

@@ -44,6 +44,13 @@ const homepageSchema = new mongoose.Schema(
       tg_channel_url: { type: String, default: d.contact.tg_channel_url },
     },
 
+    // "Powered by …" at the bottom of BizHub's screens (v3.3.0)
+    powered_by: {
+      name: { type: String, default: d.powered_by.name, maxlength: 60 },
+      url: { type: String, default: d.powered_by.url },
+      on: { type: Boolean, default: d.powered_by.on },
+    },
+
     // e.g. 100 coins = $10, 200 free coins at sign-up
     coin: {
       pack_coins: { type: Number, default: d.coin.pack_coins, min: 1 },

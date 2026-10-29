@@ -71,6 +71,23 @@ const ok = (c, m, extra) => {
     ok(r.s === 400, "javascript: is not a link → refused", r.j.message);
     r = await call("PUT", "/api/admin/homepage", { contact: { tiktok_url: LINKS.tiktok_url } }, false);
     ok(r.s === 401 || r.s === 403, "only the super admin can change them", r.s);
+    console.log("Powered by (v3.3.0)");
+    r = await call("GET", "/api/public/homepage", null, false);
+    let pb = r.j.data?.powered_by || {};
+    ok(pb.name === "Cyber Tech System" && pb.url === "https://ctscambodia.com/" && pb.on === true, "Powered by Cyber Tech System, ctscambodia.com", pb);
+    await Homepage.collection.updateOne({ key: "main" }, { $unset: { powered_by: "" } });
+    r = await call("GET", "/api/public/homepage", null, false);
+    ok(r.j.data?.powered_by?.name === "Cyber Tech System", "an older saved homepage gets it too", r.j.data?.powered_by);
+    r = await call("PUT", "/api/admin/homepage", { powered_by: { name: "CTS Cambodia", url: "https://ctscambodia.com/about" } });
+    ok(r.s === 200, "Super admin changes the name and link", r.j.message);
+    pb = (await call("GET", "/api/public/homepage", null, false)).j.data.powered_by;
+    ok(pb.name === "CTS Cambodia" && pb.url === "https://ctscambodia.com/about" && pb.on === true, "the public page has them", pb);
+    r = await call("PUT", "/api/admin/homepage", { powered_by: { on: false } });
+    ok(r.s === 200 && (await call("GET", "/api/public/homepage", null, false)).j.data.powered_by.on === false, "it can be turned off");
+    r = await call("PUT", "/api/admin/homepage", { powered_by: { url: "ctscambodia" } });
+    ok(r.s === 400, "not a link → refused", r.j.message);
+    r = await call("PUT", "/api/admin/homepage", { powered_by: { name: "x".repeat(61) } });
+    ok(r.s === 400, "a name over 60 letters → refused", r.j.message);
   } catch (e) {
     console.error(e);
     fail++;

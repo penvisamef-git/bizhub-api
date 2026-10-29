@@ -21,6 +21,8 @@ const DEFAULT_HOMEPAGE = {
     coolapp_url: "https://channel.coolapp.com.kh/@bizhub_cambodia",
     tg_channel_url: "https://t.me/bizhub_cambodia",
   },
+  // "Powered by Cyber Tech System" at the bottom of BizHub's screens (v3.3.0) — the company behind BizHub
+  powered_by: { name: "Cyber Tech System", url: "https://ctscambodia.com/", on: true },
   coin: { pack_coins: 100, pack_price_usd: 10, signup_bonus: 200 },
   // coins a customer pays to add one business of each type (keys = business types in src/biz)
   // premium_theme = coins to unlock one premium name card theme (per card)

@@ -51,6 +51,26 @@ function validateHomepage(body) {
     }
   }
 
+  // ---------- "Powered by …" (v3.3.0) ----------
+  if (body.powered_by !== undefined) {
+    const p = body.powered_by;
+    if (!isObj(p)) return { error: "powered_by ត្រូវតែជា object" };
+    if (p.name !== undefined) {
+      const name = str(p.name);
+      if (typeof name !== "string" || name.length > 60) return { error: "powered_by.name មិនត្រឹមត្រូវ (អតិបរមា 60 តួ)" };
+      set["powered_by.name"] = name;
+    }
+    if (p.url !== undefined) {
+      const url = str(p.url);
+      if (typeof url !== "string" || !isUrlOrEmpty(url)) return { error: "powered_by.url ត្រូវតែជាតំណ https://..." };
+      set["powered_by.url"] = url;
+    }
+    if (p.on !== undefined) {
+      if (typeof p.on !== "boolean") return { error: "powered_by.on ត្រូវតែជា true / false" };
+      set["powered_by.on"] = p.on;
+    }
+  }
+
   // ---------- coin ----------
   if (body.coin !== undefined) {
     if (!isObj(body.coin)) return { error: "coin ត្រូវតែជា object" };
